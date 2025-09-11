@@ -1,0 +1,6 @@
+# Local environment variables
+.env
+
+# Generated workflow artifacts
+GeneratedWorkflowProgress.json
+ValidWorkflowExample.json
