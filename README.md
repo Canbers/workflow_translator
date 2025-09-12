@@ -52,7 +52,8 @@ cp .env.example .env  # then edit .env
 
 ### Get your API token
 
-Ask your SIS admin or generate a personal access token from your account settings. Use it as a Bearer token. Keep it secret.
+Generate a Bearer token through the developer portal: https://us.tractionguest.com/dev_portal/login
+If your account is not in the "US" data centre, change the subdomain to your account tenant.
 
 ### Dry run example
 
