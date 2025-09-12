@@ -1,5 +1,14 @@
 ## SIS Workflow Translator
 
+This tool upgrades a Sign In Solutions (tractionguest.com) workflow to support translated language paths. It finds the language choice page in a workflow, uses the English branch as a template, and creates or updates parallel paths for each existing non-English language choice. In dry-run mode, it shows what would change; in write mode, it updates the workflow via the API.
+
+### What you need
+
+- **Python 3.10+**
+- An SIS **API token** (Bearer token)
+- Internet access to `https://us.tractionguest.com`
+
+
 ### Translation providers at a glance
 
 Choose a provider based on your constraints. The script supports four modes:
@@ -26,13 +35,8 @@ Choose a provider based on your constraints. The script supports four modes:
 
 Tip: Start with Mock for a dry run, then switch to LibreTranslate local for free real translations. If you need higher quality or scale, use Google or DeepL.
 
-This tool upgrades a Sign In Solutions (tractionguest.com) workflow to support translated language paths. It finds the language choice page in a workflow, uses the English branch as a template, and creates or updates parallel paths for each existing non-English language choice. In dry-run mode, it shows what would change; in write mode, it updates the workflow via the API.
 
-### What you need
 
-- **Python 3.10+**
-- An SIS **API token** (Bearer token)
-- Internet access to `https://us.tractionguest.com`
 
 ### Quick start (easiest)
 
