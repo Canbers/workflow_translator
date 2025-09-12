@@ -153,6 +153,7 @@ class Translator:
         self.api_key = api_key
         self.rate_limiter = RateLimiter(qps)
         self.endpoint = endpoint
+        self._libre_forbidden_warned: bool = False
 
         if self.provider not in {"mock", "deepl", "google", "libretranslate"}:
             raise ValueError(f"Unsupported translator provider: {provider}")
@@ -235,6 +236,12 @@ class Translator:
         try:
             resp = requests.post(url, json=data, headers=headers, timeout=20)
             if resp.status_code != 200:
+                # Provide one-time helpful guidance on 403 errors
+                if resp.status_code == 403 and not self._libre_forbidden_warned:
+                    self._libre_forbidden_warned = True
+                    logging.warning(
+                        "LibreTranslate returned 403 (likely requires API key). To use it for free locally, run 'bash run_local_libretranslate.sh start' and re-run with --translator libretranslate. Or set SIS_TRANSLATOR_ENDPOINT to your local URL."
+                    )
                 raise RuntimeError(f"LibreTranslate HTTP {resp.status_code}: {resp.text[:200]}")
             payload = resp.json()
             translated = payload.get("translatedText") or payload.get("translation")
@@ -244,6 +251,22 @@ class Translator:
         except Exception as exc:  # noqa: BLE001
             logging.warning("LibreTranslate translate error: %s", exc)
             return text
+
+
+def detect_local_libretranslate_endpoint() -> Optional[str]:
+    """Return a local LibreTranslate translate endpoint if reachable."""
+    candidates = [
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
+    ]
+    for base in candidates:
+        try:
+            resp = requests.get(f"{base}/languages", timeout=1.5)
+            if resp.status_code == 200:
+                return f"{base}/translate"
+        except Exception:  # noqa: BLE001
+            continue
+    return None
 
 
 # =============================
@@ -1385,7 +1408,17 @@ def process_workflow_pipeline(config: Config) -> None:
     else:
         logging.info("Running in WRITE mode (will PUT changes)")
 
-    translator = Translator(config.translator, config.translator_api_key, config.rate_limit_qps)
+    # If using libretranslate and no endpoint provided, try to auto-detect a local instance
+    endpoint = config.translator_endpoint
+    if (config.translator.lower() == "libretranslate") and (not endpoint):
+        autodetected = detect_local_libretranslate_endpoint()
+        if autodetected:
+            logging.info("Using local LibreTranslate at %s", autodetected)
+            endpoint = autodetected
+        else:
+            endpoint = ""  # fall back to default in translator
+
+    translator = Translator(config.translator, config.translator_api_key, config.rate_limit_qps, endpoint=endpoint)
 
     if not config.api_token and not args.self_test:  # type: ignore[name-defined]
         raise ValueError(
