@@ -124,10 +124,10 @@ When using `libretranslate`, the script will send requests to the endpoint above
 
 ### Use LibreTranslate locally for free (no account, no billing)
 
-Run a local LibreTranslate container and the script will auto-detect it.
+Run a local LibreTranslate service and the script will auto-detect it.
 
 ```bash
-bash run_local_libretranslate.sh start           # Starts on http://localhost:5000
+bash run_local_libretranslate.sh start           # Uses Docker if available, otherwise pip
 python3 sis_translate_workflow.py --translator libretranslate
 ```
 
@@ -138,7 +138,7 @@ Notes:
 python3 sis_translate_workflow.py --translator libretranslate \
   --translator-endpoint http://localhost:5000/translate
 ```
-- Stop the local container with:
+- Stop the local service with:
 ```bash
 bash run_local_libretranslate.sh stop
 ```
