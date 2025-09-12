@@ -1,50 +1,64 @@
 ## SIS Workflow Translator
 
-This script upgrades a Sign In Solutions (tractionguest.com) workflow to support translated language paths. It finds the language choice page in a workflow, uses the English branch as a template, and creates or updates parallel paths for each existing non-English language choice. In dry-run mode, it shows what would change; in write mode, it updates the workflow via the API.
+This tool upgrades a Sign In Solutions (tractionguest.com) workflow to support translated language paths. It finds the language choice page in a workflow, uses the English branch as a template, and creates or updates parallel paths for each existing non-English language choice. In dry-run mode, it shows what would change; in write mode, it updates the workflow via the API.
 
 ### What you need
 
-- **Python 3.10+** installed
-- An **API token** for your Sign In Solutions account (Bearer token)
+- **Python 3.10+**
+- An SIS **API token** (Bearer token)
 - Internet access to `https://us.tractionguest.com`
 
-### Download the script
+### Quick start (easiest)
 
-Ensure `sis_translate_workflow.py` is in your working directory.
-
-### Set up Python (first time only)
-
-1) Check Python version
+1) Run the one-time setup script
 ```bash
-python3 --version
+bash activate.sh
+```
+This creates a local virtual environment, installs dependencies, and prepares your `.env` file.
+
+2) Open `.env` and fill in at least:
+```
+SIS_API_KEY=your_api_token_here
+SIS_WORKFLOW_ID=123456
+```
+Notes:
+- `SIS_API_KEY` is preferred. `SIS_API_TOKEN` also works for backward compatibility.
+- The script auto-loads `.env` every run; you do not need to export variables manually.
+
+3) Try a safe self-test
+```bash
+python3 sis_translate_workflow.py --self-test
 ```
 
-2) Create and activate a virtual environment
+4) Run a dry run against your workflow (no changes made)
+```bash
+python3 sis_translate_workflow.py
+```
+
+5) Apply changes
+```bash
+python3 sis_translate_workflow.py --write
+```
+
+### Alternative setup (manual)
+
+If you prefer manual steps:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-3) Install the required package
-```bash
-pip install requests
-```
-
-If your system prevents venv creation, you can install `requests` user-wide:
-```bash
-python3 -m pip install --user requests
+pip install -r requirements.txt
+cp .env.example .env  # then edit .env
 ```
 
 ### Get your API token
 
-Ask your SIS admin or generate a personal access token from your account settings. You will use it as a Bearer token. Keep it secret.
+Ask your SIS admin or generate a personal access token from your account settings. Use it as a Bearer token. Keep it secret.
 
-### Quick start (dry run)
+### Dry run example
 
 Dry-run is safe and does not modify anything. It prints a summary of changes.
 ```bash
-export SIS_API_TOKEN="<YOUR_BEARER_TOKEN>"
-python3 sis_translate_workflow.py --workflow 105386
+python3 sis_translate_workflow.py
 ```
 
 Expected output includes a summary like:
@@ -60,54 +74,53 @@ Warnings            : 0
 
 When you are satisfied with the dry run, add `--write` to save changes back to the API.
 ```bash
-export SIS_API_TOKEN="<YOUR_BEARER_TOKEN>"
-python3 sis_translate_workflow.py --workflow 105386 --write
+python3 sis_translate_workflow.py --write
 ```
 
 The script will PUT the updated `workflow.body` back to the same endpoint.
 
 ### Options you might need
 
-- **Use a CLI token instead of env var**
+- **Use a CLI token instead of .env**
 ```bash
-python3 sis_translate_workflow.py --workflow 105386 --token "<YOUR_BEARER_TOKEN>"
+python3 sis_translate_workflow.py --token "<YOUR_BEARER_TOKEN>"
 ```
 
-- **Change the source (template) language label** (default is `English`)
+- **Change the source (template) language label** (default `English`)
 ```bash
-python3 sis_translate_workflow.py --workflow 105386 --source-label "English"
+python3 sis_translate_workflow.py --source-label "English"
 ```
 
 - **Choose logging level** (default `INFO`)
 ```bash
-python3 sis_translate_workflow.py --workflow 105386 --log-level DEBUG
+python3 sis_translate_workflow.py --log-level DEBUG
 ```
 
-- **Configure language codes** (optional). Map choice labels to ISO codes:
+- **Configure language codes** (optional). Map choice labels to ISO codes (in `.env` or CLI env):
 ```bash
-export SIS_LANGUAGE_MAP='{"English":"en","Spanish":"es","French":"fr"}'
+SIS_LANGUAGE_MAP='{"English":"en","Spanish":"es","French":"fr"}'
 ```
 If not set, common languages are inferred by label.
 
 - **Select a translator**
   - Default is `mock` (safe testing): it wraps text like `[es] Hello`.
-  - To use Google Translate or DeepL, set provider and API key:
+  - To use Google Translate or DeepL, set provider and API key in `.env`:
 ```bash
-export SIS_TRANSLATOR=google
-export SIS_TRANSLATOR_API_KEY="<GOOGLE_API_KEY>"
+SIS_TRANSLATOR=google
+SIS_TRANSLATOR_API_KEY="<GOOGLE_API_KEY>"
 # or
-export SIS_TRANSLATOR=deepl
-export SIS_TRANSLATOR_API_KEY="<DEEPL_API_KEY>"
+SIS_TRANSLATOR=deepl
+SIS_TRANSLATOR_API_KEY="<DEEPL_API_KEY>"
 ```
 
 - **Rate limiting** (requests per second; default 8):
 ```bash
-export SIS_RATE_LIMIT_QPS=6
+SIS_RATE_LIMIT_QPS=6
 ```
 
 - **Force dry-run or write via env**
 ```bash
-export SIS_DRY_RUN=true  # or false
+SIS_DRY_RUN=true  # or false
 ```
 
 ### What the script changes
@@ -115,7 +128,7 @@ export SIS_DRY_RUN=true  # or false
 - Finds the language choice page where `configuration.data_name == "language"`.
 - Uses the English branch as the template.
 - For each existing non-English choice: creates or updates a parallel path so it matches the English structure and translates user-facing text.
-- Adds `meta.lang` and `meta.cloned_from` to cloned/updated nodes for idempotent re-runs.
+- Does not modify the language choice page conditions; only branches for languages that already have a start node are processed.
 - Only `workflow.body` is changed on PUT.
 
 ### Safe testing without the API
@@ -128,10 +141,10 @@ python3 sis_translate_workflow.py --self-test
 ### Troubleshooting
 
 - `ModuleNotFoundError: No module named 'requests'`
-  - Activate your venv and run `pip install requests`, or use `python3 -m pip install --user requests`.
+  - Run `bash activate.sh` again, or inside the venv run `pip install -r requirements.txt`.
 
 - `API unauthorized (401)` or `forbidden (403)`
-  - Check the token value and permissions. Ensure you exported `SIS_API_TOKEN` or passed `--token`.
+  - Check the token value and permissions. Ensure `.env` has `SIS_API_KEY` (or pass `--token`).
 
 - `Language page not found`
   - The workflow must contain a page with `configuration.data_name == "language"` and choices.
@@ -142,18 +155,17 @@ python3 sis_translate_workflow.py --self-test
 ### Security notes
 
 - Your API token is never printed. Logs redact sensitive values.
-- Prefer environment variables over pasting tokens into shell history.
+- Use `.env` (not shell history) to store secrets. `.env` is ignored by git.
 
 ### Full command examples
 
-Dry run with environment token:
+Dry run with .env values:
 ```bash
-export SIS_API_TOKEN="<TOKEN>"
-python3 sis_translate_workflow.py --workflow 105386
+python3 sis_translate_workflow.py
 ```
 
 Write changes with CLI token and verbose logs:
 ```bash
-python3 sis_translate_workflow.py --workflow 105386 --token "<TOKEN>" --write --log-level DEBUG
+python3 sis_translate_workflow.py --token "<TOKEN>" --write --log-level DEBUG
 ```
 

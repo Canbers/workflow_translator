@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import html
 import logging
 import os
 import re
@@ -31,9 +32,9 @@ import requests
 # Configuration defaults
 # =============================
 
-WORKFLOW_ID: str | int = 0
+WORKFLOW_ID: str | int = ""  # must be provided via --workflow or env
 API_BASE_URL: str = "https://us.tractionguest.com"
-API_TOKEN: str = ""
+API_TOKEN: str = ""  # must be provided via --token or env
 SOURCE_LANGUAGE_LABEL: str = "English"
 LANGUAGE_MAP: Dict[str, str] = {"English": "en"}
 DRY_RUN: bool = True
@@ -86,6 +87,35 @@ def setup_logging(level: str) -> None:
         level=numeric_level,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+
+
+# =============================
+# .env loader (no external dependency)
+# =============================
+
+
+def load_env_file(path: str = ".env") -> None:
+    """Load KEY=VALUE pairs from a .env file into os.environ if not already set.
+
+    Lines starting with '#' are comments. Quotes around values are stripped.
+    """
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except Exception as exc:  # noqa: BLE001
+        logging.debug("Could not load .env file: %s", exc)
 
 
 # =============================
@@ -153,7 +183,8 @@ class Translator:
             translations = payload.get("translations", [])
             if not translations:
                 raise RuntimeError("DeepL: empty translations")
-            return translations[0].get("text", text)
+            translated = translations[0].get("text", text)
+            return html.unescape(translated)
         except Exception as exc:  # noqa: BLE001
             logging.warning("DeepL translate error: %s", exc)
             return text
@@ -162,7 +193,7 @@ class Translator:
         self.rate_limiter.wait()
         url = "https://translation.googleapis.com/language/translate/v2"
         params = {"key": self.api_key}
-        data = {"q": text, "target": target_iso}
+        data = {"q": text, "target": target_iso, "format": "text"}
         headers = {"Content-Type": "application/json"}
         try:
             resp = requests.post(url, params=params, json=data, headers=headers, timeout=20)
@@ -173,7 +204,8 @@ class Translator:
             translations = data_obj.get("translations", [])
             if not translations:
                 raise RuntimeError("Google: empty translations")
-            return translations[0].get("translatedText", text)
+            translated = translations[0].get("translatedText", text)
+            return html.unescape(translated)
         except Exception as exc:  # noqa: BLE001
             logging.warning("Google translate error: %s", exc)
             return text
@@ -212,6 +244,21 @@ def extract_tokens(text: str) -> Tuple[str, Dict[str, str]]:
 def restore_tokens(text: str, placeholders: Dict[str, str]) -> str:
     for key, original in placeholders.items():
         text = text.replace(key, original)
+    return text
+
+
+def strip_mock_prefix(text: str, target_iso: str) -> str:
+    """Remove leading mock prefix like "[es] " when translating with a real provider.
+
+    Only strips if the code matches the target_iso (case-insensitive) to avoid
+    accidentally removing legitimate bracketed content.
+    """
+    m = re.match(r"^\[([A-Za-z]{2}(?:-[A-Za-z]{2})?)\]\s+", text)
+    if not m:
+        return text
+    code = m.group(1)
+    if code.lower() == target_iso.lower():
+        return text[m.end():]
     return text
 
 
@@ -320,9 +367,11 @@ def build_choice_maps(language_node: Dict[str, Any]) -> Tuple[Dict[int, str], Di
 def build_label_to_startnode(language_node: Dict[str, Any], id_to_label: Dict[int, str]) -> Dict[str, Optional[str]]:
     next_obj = language_node.get("next") or {}
     conditions = next_obj.get("conditions") or []
+    default_result = next_obj.get("default")
     label_to_start: Dict[str, Optional[str]] = {}
+    # Build explicit mappings from conditions
     for cond in conditions:
-        if cond.get("lval") != "language_id":
+        if cond.get("lval") != "reason_id":
             continue
         try:
             rval = int(cond.get("rval"))
@@ -332,6 +381,14 @@ def build_label_to_startnode(language_node: Dict[str, Any], id_to_label: Dict[in
         label = id_to_label.get(rval)
         if label is not None:
             label_to_start[label] = str(result) if result is not None else None
+    # Any choice without an explicit condition should inherit the page default
+    if default_result is not None:
+        for choice_id, label in id_to_label.items():
+            if label not in label_to_start:
+                label_to_start[label] = str(default_result)
+    logging.debug(
+        "Language routing map built: %s (default=%s)", label_to_start, default_result
+    )
     return label_to_start
 
 
@@ -399,33 +456,298 @@ def iso_from_label(label: str, language_map: Dict[str, str]) -> str:
         return language_map[label]
     normalized = label.strip().lower()
     heuristics = {
+        # English and variants
         "english": "en",
         "en": "en",
+        "en-us": "en-US",
+        "us english": "en-US",
+        "american english": "en-US",
+        "en-gb": "en-GB",
+        "british english": "en-GB",
+        "uk english": "en-GB",
+        "en-ca": "en-CA",
+        "canadian english": "en-CA",
+        "en-au": "en-AU",
+        "australian english": "en-AU",
+        "en-in": "en-IN",
+        "indian english": "en-IN",
+
+        # Spanish and variants
         "spanish": "es",
         "español": "es",
         "espanol": "es",
+        "castellano": "es",
+        "es-es": "es-ES",
+        "spain spanish": "es-ES",
+        "es-mx": "es-MX",
+        "mexican spanish": "es-MX",
+        "es-419": "es-419",
+        "latin american spanish": "es-419",
+        "es-ar": "es-AR",
+
+        # French and variants
         "french": "fr",
         "français": "fr",
         "francais": "fr",
-        "german": "de",
-        "deutsch": "de",
-        "italian": "it",
-        "italiano": "it",
+        "fr-ca": "fr-CA",
+        "canadian french": "fr-CA",
+        "fr-be": "fr-BE",
+        "belgian french": "fr-BE",
+        "fr-ch": "fr-CH",
+        "swiss french": "fr-CH",
+
+        # Portuguese and variants
         "portuguese": "pt",
         "português": "pt",
         "portugues": "pt",
+        "pt-br": "pt-BR",
+        "brazilian portuguese": "pt-BR",
+        "pt-pt": "pt-PT",
+        "european portuguese": "pt-PT",
+
+        # German and variants
+        "german": "de",
+        "deutsch": "de",
+        "de-at": "de-AT",
+        "austrian german": "de-AT",
+        "de-ch": "de-CH",
+        "swiss german": "de-CH",
+
+        # Italian
+        "italian": "it",
+        "italiano": "it",
+
+        # Dutch and Flemish
+        "dutch": "nl",
+        "nederlands": "nl",
+        "vlaams": "nl-BE",
+        "flemish": "nl-BE",
+        "nl-be": "nl-BE",
+
+        # Nordic languages
+        "swedish": "sv",
+        "svenska": "sv",
+        "norwegian": "no",
+        "norsk": "no",
+        "bokmål": "nb",
+        "bokmal": "nb",
+        "nynorsk": "nn",
+        "danish": "da",
+        "dansk": "da",
+        "finnish": "fi",
+        "suomi": "fi",
+        "icelandic": "is",
+        "íslenska": "is",
+        "islenska": "is",
+
+        # Baltic languages
+        "estonian": "et",
+        "eesti": "et",
+        "latvian": "lv",
+        "latviešu": "lv",
+        "lithuanian": "lt",
+        "lietuvių": "lt",
+
+        # Central/Eastern Europe
+        "polish": "pl",
+        "polski": "pl",
+        "czech": "cs",
+        "čeština": "cs",
+        "cestina": "cs",
+        "slovak": "sk",
+        "slovenčina": "sk",
+        "slovencina": "sk",
+        "slovenian": "sl",
+        "slovenščina": "sl",
+        "slovenscina": "sl",
+        "hungarian": "hu",
+        "magyar": "hu",
+        "romanian": "ro",
+        "română": "ro",
+        "romana": "ro",
+        "moldovan": "ro-MD",
+        "bulgarian": "bg",
+        "български": "bg",
+        "greek": "el",
+        "ελληνικά": "el",
+
+        # Balkans
+        "serbian": "sr",
+        "srpski": "sr",
+        "српски": "sr",
+        "croatian": "hr",
+        "hrvatski": "hr",
+        "bosnian": "bs",
+        "bosanski": "bs",
+        "macedonian": "mk",
+        "македонски": "mk",
+        "albanian": "sq",
+        "shqip": "sq",
+
+        # Slavic East
+        "ukrainian": "uk",
+        "українська": "uk",
+        "belarusian": "be",
+        "беларуская": "be",
+        "russian": "ru",
+        "русский": "ru",
+
+        # Caucasus and Central Asia
+        "armenian": "hy",
+        "հայերեն": "hy",
+        "georgian": "ka",
+        "ქართული": "ka",
+        "azerbaijani": "az",
+        "azerbaijan": "az",
+        "azeri": "az",
+        "azərbaycan": "az",
+        "kazakh": "kk",
+        "қазақ": "kk",
+        "uzbek": "uz",
+        "oʻzbekcha": "uz",
+        "ozbekcha": "uz",
+        "tajik": "tg",
+        "tojiki": "tg",
+        "kyrgyz": "ky",
+        "кыргызча": "ky",
+        "turkmen": "tk",
+        "türkmençe": "tk",
+        "turkmence": "tk",
+        "mongolian": "mn",
+        "монгол": "mn",
+
+        # Middle East
+        "turkish": "tr",
+        "türkçe": "tr",
+        "turkce": "tr",
+        "arabic": "ar",
+        "العربية": "ar",
+        "persian": "fa",
+        "farsi": "fa",
+        "فارسی": "fa",
+        "dari": "fa-AF",
+        "pashto": "ps",
+        "پښتو": "ps",
+        "kurdish": "ku",
+        "kurdî": "ku",
+
+        # Hebrew and Yiddish
+        "hebrew": "he",
+        "עברית": "he",
+        "ivrit": "he",
+        "yiddish": "yi",
+        "יידיש": "yi",
+
+        # South Asia
+        "hindi": "hi",
+        "हिंदी": "hi",
+        # Note: Urdu is written right-to-left
+        "urdu": "ur",
+        "اردو": "ur",
+        "bengali": "bn",
+        "bangla": "bn",
+        "বাংলা": "bn",
+        "punjabi": "pa",
+        "panjabi": "pa",
+        "ਪੰਜਾਬੀ": "pa",
+        "gujarati": "gu",
+        "ગુજરાતી": "gu",
+        "marathi": "mr",
+        "मराठी": "mr",
+        "tamil": "ta",
+        "தமிழ்": "ta",
+        "telugu": "te",
+        "తెలుగు": "te",
+        "kannada": "kn",
+        "ಕನ್ನಡ": "kn",
+        "malayalam": "ml",
+        "മലയാളം": "ml",
+        "sinhala": "si",
+        "sinhalese": "si",
+        "සිංහල": "si",
+        "odia": "or",
+        "oriya": "or",
+        "ଓଡ଼ିଆ": "or",
+        "assamese": "as",
+        "অসমীয়া": "as",
+        "nepali": "ne",
+        "नेपाली": "ne",
+
+        # Southeast Asia
+        "burmese": "my",
+        "myanmar": "my",
+        "မြန်မာ": "my",
+        "khmer": "km",
+        "cambodian": "km",
+        "ខ្មែរ": "km",
+        "lao": "lo",
+        "ລາວ": "lo",
+        "thai": "th",
+        "ไทย": "th",
+        "vietnamese": "vi",
+        "tiếng việt": "vi",
+        "tieng viet": "vi",
+        "indonesian": "id",
+        "bahasa indonesia": "id",
+        "bahasa": "id",
+        "malay": "ms",
+        "bahasa melayu": "ms",
+        "melayu": "ms",
+        "filipino": "fil",
+        "tagalog": "fil",
+        "tl": "tl",
+
+        # East Asia
         "japanese": "ja",
+        "nihongo": "ja",
         "日本語": "ja",
-        "chinese": "zh",
-        "中文": "zh",
-        "简体中文": "zh-CN",
-        "繁體中文": "zh-TW",
+        "にほんご": "ja",
         "korean": "ko",
         "한국어": "ko",
-        "arabic": "ar",
-        "русский": "ru",
-        "russian": "ru",
-        "hindi": "hi",
+        "조선말": "ko",
+        "chinese": "zh",
+        "中文": "zh",
+        "simplified chinese": "zh-CN",
+        "traditional chinese": "zh-TW",
+        "简体中文": "zh-CN",
+        "繁體中文": "zh-TW",
+        "zh-cn": "zh-CN",
+        "zh-tw": "zh-TW",
+        "zh-hk": "zh-HK",
+        "cantonese": "zh-HK",
+        "粤语": "zh-HK",
+        "粵語": "zh-HK",
+
+        # Africa
+        "afrikaans": "af",
+        "hausa": "ha",
+        "igbo": "ig",
+        "yoruba": "yo",
+        "swahili": "sw",
+        "kiswahili": "sw",
+        "amharic": "am",
+        "አማርኛ": "am",
+        "somali": "so",
+        "af-soomaali": "so",
+        "zulu": "zu",
+        "xhosa": "xh",
+        "sesotho": "st",
+        "setswana": "tn",
+        "tswana": "tn",
+        "shona": "sn",
+        "malagasy": "mg",
+
+        # Americas and Pacific
+        "haitian creole": "ht",
+        "kreyòl ayisyen": "ht",
+        "maori": "mi",
+        "te reo māori": "mi",
+        "te reo maori": "mi",
+        "samoan": "sm",
+        "gagana sāmoa": "sm",
+        "tongan": "to",
+        "lea fakatonga": "to",
+        "fijian": "fj",
     }
     return heuristics.get(normalized, normalized[:2] if len(normalized) >= 2 else "")
 
@@ -455,41 +777,76 @@ def translate_node_strings(
     """Translate user-visible strings in node in-place. Returns number of translated strings."""
     translated_count = 0
 
-    def maybe_translate(value: Any) -> Any:
+    def translate_string(text: str) -> str:
         nonlocal translated_count
-        if isinstance(value, str):
-            if not value or looks_like_url_or_html(value) or is_only_tokens_or_whitespace(value):
-                return value
-            sanitized, placeholders = extract_tokens(value)
-            out = translator.translate(sanitized, target_iso)
-            out = restore_tokens(out, placeholders)
-            if out != value:
-                translated_count += 1
+        if not text or looks_like_url_or_html(text) or is_only_tokens_or_whitespace(text):
+            return text
+        base_text = text
+        if translator.provider != "mock":
+            base_text = strip_mock_prefix(base_text, target_iso)
+        sanitized, placeholders = extract_tokens(base_text)
+        out = translator.translate(sanitized, target_iso)
+        out = restore_tokens(out, placeholders)
+        if out != text:
+            translated_count += 1
+        return out
+
+    template_id = str(node.get("template_id") or "")
+    # Determine which keys are considered translatable for this node type
+    translatable_keys_for_node: Set[str] = set(TRANSLATABLE_KEYS)
+    # For auto-routing pages, never translate any 'title' fields (admin-only),
+    # but ensure 'loading' may be translated via labels handling below.
+    if template_id in {"invitecheck", "watchlistcheck", "hostcheck"}:
+        if "title" in translatable_keys_for_node:
+            translatable_keys_for_node.remove("title")
+
+    def translate_conf_value(value: Any, parent_key: Optional[str] = None, ancestor_translatable: bool = False) -> Any:
+        # Only translate user-visible strings. Never translate any 'data_name'.
+        if isinstance(value, dict):
+            out: Dict[str, Any] = {}
+            for k, v in value.items():
+                if k == "data_name" or k == "name":
+                    out[k] = v
+                    continue
+                current_translatable = ancestor_translatable or (k in translatable_keys_for_node)
+                if isinstance(v, str) and (k in translatable_keys_for_node or ancestor_translatable):
+                    out[k] = translate_string(v)
+                else:
+                    out[k] = translate_conf_value(v, k, current_translatable)
             return out
         if isinstance(value, list):
-            return [maybe_translate(v) for v in value]
-        if isinstance(value, dict):
-            return {k: maybe_translate(v) for k, v in value.items()}
+            # Translate strings inside lists if any ancestor key is marked translatable
+            new_list: List[Any] = []
+            for item in value:
+                if isinstance(item, dict):
+                    new_list.append(translate_conf_value(item, parent_key, ancestor_translatable))
+                elif isinstance(item, str) and ancestor_translatable:
+                    new_list.append(translate_string(item))
+                else:
+                    new_list.append(item)
+            return new_list
+        if isinstance(value, str) and ancestor_translatable and (parent_key not in {"data_name", "name"}):
+            return translate_string(value)
         return value
 
     # Translate labels
+    label_keys_to_translate: Set[str] = set(TRANSLATABLE_KEYS)
+    # Special case: for invitecheck and watchlistcheck, do NOT translate 'title';
+    # instead translate 'loading'.
+    if template_id in {"invitecheck", "watchlistcheck", "hostcheck"}:
+        label_keys_to_translate.add("loading")
+        if "title" in label_keys_to_translate:
+            label_keys_to_translate.remove("title")
     labels = node.get("labels")
     if isinstance(labels, dict):
         for key in list(labels.keys()):
-            if key in TRANSLATABLE_KEYS and isinstance(labels.get(key), str):
-                labels[key] = maybe_translate(labels[key])
+            if key in label_keys_to_translate and isinstance(labels.get(key), str):
+                labels[key] = translate_string(labels[key])
 
-    # Translate configuration strings (common fields)
+    # Translate configuration strings (only user-visible; exclude identifiers like data_name)
     conf = node.get("configuration")
     if isinstance(conf, dict):
-        for key, val in list(conf.items()):
-            # Reasons on non-language pages may exist; translate their titles/labels
-            if key in TRANSLATABLE_KEYS and isinstance(val, str):
-                conf[key] = maybe_translate(val)
-            elif isinstance(val, list):
-                conf[key] = [maybe_translate(v) for v in val]
-            elif isinstance(val, dict):
-                conf[key] = maybe_translate(val)
+        node["configuration"] = translate_conf_value(conf)
 
     return translated_count
 
@@ -517,30 +874,168 @@ def clone_subgraph(
     # Second pass: fix next pointers within the cloned set
     for old_id, new_id in old_to_new.items():
         node = nodes[new_id]
-        nxt = node.get("next") or {}
-        conditions = nxt.get("conditions") or []
-        for cond in conditions:
-            res = cond.get("result")
-            if res is not None:
-                res_str = str(res)
-                if res_str in old_to_new:
-                    cond["result"] = old_to_new[res_str]
-        if nxt.get("default") is not None:
-            def_res = str(nxt.get("default"))
-            if def_res in old_to_new:
-                nxt["default"] = old_to_new[def_res]
-        node["next"] = nxt
+        nxt_val = node.get("next")
+        if isinstance(nxt_val, dict):
+            nxt = nxt_val
+            conditions = nxt.get("conditions") or []
+            for cond in conditions:
+                res = cond.get("result")
+                if res is not None:
+                    res_str = str(res)
+                    if res_str in old_to_new:
+                        cond["result"] = old_to_new[res_str]
+            if nxt.get("default") is not None:
+                def_res = str(nxt.get("default"))
+                if def_res in old_to_new:
+                    nxt["default"] = old_to_new[def_res]
+            node["next"] = nxt
 
     new_start_id = old_to_new[str(start_id)]
     return new_start_id, old_to_new
 
 
+def graft_clone_subgraph(
+    inner: Dict[str, Any],
+    template_start_id: str,
+    existing_start_id: str,
+) -> Dict[str, str]:
+    """Deprecated grafting: kept for backward compatibility but currently unused."""
+    new_start_id, mapping = clone_subgraph(inner, template_start_id)
+    return mapping
+
+
+def adjust_cloned_branch_for_end_thanks_and_crumbs(
+    inner: Dict[str, Any],
+    mapping: Dict[str, str],
+    template_start_id: str,
+    language_label: str,
+    existing_end_thanks_id: Optional[str],
+) -> None:
+    """Adjust a cloned branch:
+    - Set crumb on the start node to the language label
+    - If a visitreason exists in the cloned branch, set crumbs of its targets to the reason titles
+    - If existing_end_thanks_id is provided, redirect default edges that point to a cloned thanks to reuse it,
+      and delete the unused cloned thanks nodes.
+    - Preserve next=null for thanks pages.
+    """
+    nodes = inner.get("nodes", {})
+    # Set crumb on start
+    start_new_id = mapping.get(str(template_start_id))
+    if start_new_id and start_new_id in nodes:
+        nodes[start_new_id]["crumb"] = language_label
+
+    # Build reverse map new_id -> old_id
+    new_to_old = {v: k for k, v in mapping.items()}
+
+    # Prepare English (template) defaults map and thanks info
+    english_nodes: Dict[str, Dict[str, Any]] = inner.get("nodes", {})
+    english_default_map: Dict[str, Optional[str]] = {}
+    english_is_thanks: Set[str] = set()
+    for old_id in mapping.keys():
+        en_node = english_nodes.get(str(old_id))
+        if not isinstance(en_node, dict):
+            continue
+        if str(en_node.get("template_id")) == "thanks":
+            english_is_thanks.add(str(old_id))
+        nxt = en_node.get("next") or {}
+        english_default_map[str(old_id)] = nxt.get("default") if isinstance(nxt, dict) else None
+
+    # Force-correct defaults in cloned branch based on English defaults; always point to the cloned counterpart
+    for old_id, new_id in mapping.items():
+        new_node = nodes.get(new_id)
+        if not isinstance(new_node, dict):
+            continue
+        if str(new_node.get("template_id")) == "thanks":
+            new_node["next"] = None
+            continue
+        en_default = english_default_map.get(str(old_id))
+        # Ensure next is a dict structure
+        nxt_val = new_node.get("next")
+        nxt_obj: Dict[str, Any] = nxt_val if isinstance(nxt_val, dict) else {"conditions": [], "default": None}
+        if en_default is not None:
+            en_default_str = str(en_default)
+            mapped_new = mapping.get(en_default_str)
+            if mapped_new is not None:
+                nxt_obj["default"] = str(mapped_new)
+        # Avoid cycles: don't let a node default to itself or to the start node
+        if str(nxt_obj.get("default")) in {str(new_id), mapping.get(str(template_start_id), ""), str(template_start_id)}:
+            # If cycle detected and English default was a thanks, map to its cloned counterpart if available
+            if en_default is not None and str(en_default) in mapping:
+                nxt_obj["default"] = str(mapping[str(en_default)])
+        new_node["next"] = nxt_obj
+
+    # Collect cloned thanks ids
+    cloned_thanks_ids: Set[str] = set()
+    for old_id, new_id in mapping.items():
+        node = nodes.get(new_id)
+        if not node:
+            continue
+        if str(node.get("template_id")) == "thanks":
+            cloned_thanks_ids.add(new_id)
+        # Preserve null next for thanks
+        if str(node.get("template_id")) == "thanks":
+            if node.get("next") is None:
+                pass
+            elif isinstance(node.get("next"), dict) and not node.get("next"):  # empty dict
+                node["next"] = None
+
+    # Set crumbs for targets of visitreason in cloned branch
+    for old_id, new_id in mapping.items():
+        node = nodes.get(new_id)
+        if not node:
+            continue
+        if str(node.get("template_id")) == "visitreason":
+            # Set the visitreason node's crumb to the language label
+            node["crumb"] = language_label
+            conf = node.get("configuration") or {}
+            reasons = conf.get("reasons") or []
+            rid_to_title = {int(r.get("id")): str(r.get("title")) for r in reasons if r.get("id") is not None}
+            nxt = node.get("next") or {}
+            for cond in (nxt.get("conditions") or []):
+                rid = int(cond.get("rval", -1))
+                target = cond.get("result")
+                if target is not None and str(target) in nodes:
+                    nodes[str(target)]["crumb"] = rid_to_title.get(rid, nodes[str(target)].get("crumb"))
+            # Propagate crumb down the branch from each condition target (default and conditions)
+            def propagate_crumb(from_id: Any, crumb_value: str) -> None:
+                stack: List[str] = [str(from_id)]
+                seen: Set[str] = set()
+                mapped_values: Set[str] = set(mapping.values())
+                while stack:
+                    nid = stack.pop()
+                    if nid in seen or nid not in nodes or nid not in mapped_values:
+                        continue
+                    seen.add(nid)
+                    n = nodes[nid]
+                    if not isinstance(n, dict):
+                        continue
+                    # Do not change visitreason nodes' crumb here; they will set their children
+                    if str(n.get("template_id")) != "visitreason":
+                        if "crumb" not in n or not n.get("crumb"):
+                            n["crumb"] = crumb_value
+                    nxt2 = n.get("next") or {}
+                    for c in (nxt2.get("conditions") or []):
+                        if c.get("result") is not None:
+                            stack.append(str(c.get("result")))
+                    if nxt2.get("default") is not None:
+                        stack.append(str(nxt2.get("default")))
+
+            # Propagate for each condition target
+            for cond in (nxt.get("conditions") or []):
+                target = cond.get("result")
+                rid = int(cond.get("rval", -1))
+                if target is not None:
+                    propagate_crumb(target, rid_to_title.get(rid, language_label))
+            # And also for default if it exists, keep current language label
+            if (node.get("next") or {}).get("default") is not None:
+                propagate_crumb((node.get("next") or {}).get("default"), language_label)
+
+    # No redirection to existing end thanks; cloned branch retains its own thanks topology
+
+
 def ensure_meta_lang(node: Dict[str, Any], iso: str) -> None:
-    meta = node.get("meta")
-    if not isinstance(meta, dict):
-        meta = {}
-        node["meta"] = meta
-    meta["lang"] = iso
+    # No-op: do not inject meta into nodes
+    return
 
 
 def process_languages(
@@ -557,7 +1052,22 @@ def process_languages(
     if source_label not in label_to_id:
         raise ValueError(f"Source language label '{source_label}' not found among choices")
     if source_label not in label_to_start or not label_to_start[source_label]:
-        raise ValueError(f"No start node found for source language '{source_label}'")
+        # Fallback: use the language page default if present
+        nxt = language_node.get("next") or {}
+        default_result = nxt.get("default")
+        if default_result is not None:
+            logging.warning(
+                "No explicit start for '%s'; using page default %s",
+                source_label,
+                default_result,
+            )
+            label_to_start[source_label] = str(default_result)
+        else:
+            logging.error(
+                "Language routing conditions: %s",
+                (nxt.get("conditions") or []),
+            )
+            raise ValueError(f"No start node found for source language '{source_label}'")
 
     english_start = str(label_to_start[source_label])
 
@@ -579,59 +1089,69 @@ def process_languages(
         existing_start = label_to_start.get(label)
 
         if existing_start and str(existing_start) in inner.get("nodes", {}):
-            # Update in place if meta.lang matches
-            start_node = inner["nodes"][str(existing_start)]
-            meta = start_node.get("meta") or {}
-            if meta.get("lang") == target_iso:
-                logging.info("Updating existing path for '%s' (start node %s)", label, existing_start)
-                # Walk this path limited to template visited nodes shape if possible
+            # Graft template English path onto existing start node; do not edit conditions
+            logging.info("Grafting template for '%s' at start node %s", label, existing_start)
+            # Capture existing end thanks reachable from this language path (default)
+            # by walking from current start and taking default chain to a thanks, if present
+            existing_end_thanks_id: Optional[str] = None
+            try:
                 order, _ = walk_subgraph(inner, str(existing_start))
-                translated_here = 0
-                for nid in order:
+                for nid in reversed(order):
                     node = inner["nodes"][nid]
-                    translated_here += translate_node_strings(node, target_iso, translator)
-                    ensure_meta_lang(node, target_iso)
-                summary.nodes_updated += len(order)
-                summary.strings_translated += translated_here
-            else:
-                # Either different lang or not set; treat as clone to avoid breaking other uses
-                logging.info("Cloning template for '%s' (existing start %s ignored)", label, existing_start)
-                new_start, mapping = clone_subgraph(inner, english_start)
-                # Translate cloned nodes
-                translated_here = 0
-                for old_id, new_id in mapping.items():
-                    node = inner["nodes"][new_id]
-                    translated_here += translate_node_strings(node, target_iso, translator)
-                    ensure_meta_lang(node, target_iso)
-                    # mark where it came from
-                    meta2 = node.get("meta") or {}
-                    meta2["cloned_from"] = "en"
-                    node["meta"] = meta2
-                # Wire the language condition to new_start
-                _wire_language_condition(language_node, label, new_start, id_to_label, label_to_id)
-                summary.nodes_created += len(mapping)
-                summary.strings_translated += translated_here
-        else:
-            # No path yet: clone from English
-            logging.info("Creating new path for '%s'", label)
+                    if str(node.get("template_id")) == "thanks":
+                        existing_end_thanks_id = nid
+                        break
+            except Exception:  # noqa: BLE001
+                pass
+
             new_start, mapping = clone_subgraph(inner, english_start)
+            # Repoint the language page's condition result remains unchanged (existing_start),
+            # so copy the newly cloned start onto that existing id and shift mapping to reflect
+            if str(existing_start) in inner["nodes"] and new_start in inner["nodes"]:
+                # Replace existing start node content with the cloned start content
+                existing_node = inner["nodes"][str(existing_start)]
+                cloned_start_node = inner["nodes"][new_start]
+                preserved_id = existing_node["id"]
+                for k in list(existing_node.keys()):
+                    if k != "id":
+                        del existing_node[k]
+                for k, v in cloned_start_node.items():
+                    if k == "id":
+                        continue
+                    existing_node[k] = v
+                existing_node["id"] = preserved_id
+                # Remove the cloned start node and update mapping to point to existing_start
+                try:
+                    del inner["nodes"][new_start]
+                except Exception:  # noqa: BLE001
+                    pass
+                mapping = {k: (str(existing_start) if v == new_start else v) for k, v in mapping.items()}
+
+            # Adjust thanks reuse and crumbs
+            adjust_cloned_branch_for_end_thanks_and_crumbs(
+                inner=inner,
+                mapping=mapping,
+                template_start_id=english_start,
+                language_label=label,
+                existing_end_thanks_id=existing_end_thanks_id,
+            )
             translated_here = 0
-            for old_id, new_id in mapping.items():
+            for old_id, new_id in list(mapping.items()):
+                if new_id not in inner["nodes"]:
+                    continue
                 node = inner["nodes"][new_id]
                 translated_here += translate_node_strings(node, target_iso, translator)
-                ensure_meta_lang(node, target_iso)
-                meta2 = node.get("meta") or {}
-                meta2["cloned_from"] = "en"
-                node["meta"] = meta2
-            _wire_language_condition(language_node, label, new_start, id_to_label, label_to_id)
-            summary.nodes_created += len(mapping)
+            summary.nodes_created += max(0, len(mapping) - 1)  # excluding the grafted start
+            summary.nodes_updated += 1  # start node overwritten
             summary.strings_translated += translated_here
+        else:
+            # No explicit start for this language; do not modify language choice page
+            logging.info("No existing path for '%s'; skipping per requirements (no condition edits)", label)
+            summary.warnings.append(f"Skipping '{label}' because no start node is wired on language page")
 
         # Validate
         new_start_for_label = _get_language_result(language_node, label, id_to_label, label_to_id)
-        if new_start_for_label is None or str(new_start_for_label) not in inner.get("nodes", {}):
-            summary.warnings.append(f"Language '{label}' has dangling start node reference")
-        else:
+        if new_start_for_label is not None and str(new_start_for_label) in inner.get("nodes", {}):
             tgt_shape = compute_shape_signature(inner, str(new_start_for_label))
             if tgt_shape != template_shape:
                 summary.warnings.append(
@@ -651,33 +1171,15 @@ def _get_language_result(
     nxt = language_node.get("next") or {}
     conditions = nxt.get("conditions") or []
     for cond in conditions:
-        if cond.get("lval") == "language_id" and int(cond.get("rval", -1)) == int(choice_id):
+        if cond.get("lval") == "reason_id" and int(cond.get("rval", -1)) == int(choice_id):
             res = cond.get("result")
             return str(res) if res is not None else None
     return None
 
 
-def _wire_language_condition(
-    language_node: Dict[str, Any],
-    label: str,
-    new_start_id: str,
-    id_to_label: Dict[int, str],
-    label_to_id: Dict[str, int],
-) -> None:
-    choice_id = label_to_id.get(label)
-    if choice_id is None:
-        raise ValueError(f"Choice label '{label}' not found on language page")
-    nxt = language_node.get("next") or {}
-    conditions = nxt.get("conditions") or []
-    updated = False
-    for cond in conditions:
-        if cond.get("lval") == "language_id" and int(cond.get("rval", -1)) == int(choice_id):
-            cond["result"] = new_start_id
-            updated = True
-            break
-    if not updated:
-        # Do not add new choices; but routing existed without condition? Unlikely
-        raise ValueError(f"Routing condition for label '{label}' not found; cannot wire new start node")
+def _wire_language_condition(*args: Any, **kwargs: Any) -> None:  # deprecated: do nothing
+    # Intentionally left blank per requirement: do not edit language choice page conditions.
+    return
 
 
 # =============================
@@ -701,6 +1203,64 @@ def print_summary(summary: Summary) -> None:
         print("Warnings:")
         for w in summary.warnings:
             print(f" - {w}")
+
+
+# =============================
+# Validation and diff utilities
+# =============================
+
+
+def validate_inner(inner: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+    errors: List[str] = []
+    warnings: List[str] = []
+    nodes = inner.get("nodes")
+    if not isinstance(nodes, dict) or not nodes:
+        errors.append("Inner body missing or empty 'nodes'")
+        return errors, warnings
+
+    start_id = str(inner.get("starting_node_id") or "")
+    if start_id and start_id not in nodes:
+        errors.append(f"starting_node_id '{start_id}' not found in nodes")
+
+    for nid, node in nodes.items():
+        node_id = str(node.get("id"))
+        if node_id != str(nid):
+            warnings.append(f"Node key/id mismatch: key={nid} id={node_id}")
+        nxt = node.get("next") or {}
+        conditions = nxt.get("conditions") or []
+        for cond in conditions:
+            res = cond.get("result")
+            if res is not None and str(res) not in nodes:
+                errors.append(f"Node {nid} condition result -> {res} not found")
+        def_res = nxt.get("default")
+        if def_res is not None and str(def_res) not in nodes:
+            errors.append(f"Node {nid} default -> {def_res} not found")
+        # Enforce rule: only template_id == 'thanks' may have next == null
+        template_id = str(node.get("template_id") or "")
+        if template_id != "thanks":
+            # For non-thanks pages, next.default must not be None
+            if nxt is None or nxt.get("default") is None:
+                errors.append(f"Node {nid} (template_id={template_id}) must have non-null next.default")
+
+    # Language page existence is important but not fatal for general validation
+    try:
+        _ = find_language_page(inner)
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(str(exc))
+
+    return errors, warnings
+
+
+def diff_summary(old_inner: Dict[str, Any], new_inner: Dict[str, Any]) -> Dict[str, Any]:
+    old_nodes = set((old_inner.get("nodes") or {}).keys())
+    new_nodes = set((new_inner.get("nodes") or {}).keys())
+    added = sorted(new_nodes - old_nodes)
+    removed = sorted(old_nodes - new_nodes)
+    return {
+        "total_nodes": len(new_nodes),
+        "added_nodes": added,
+        "removed_nodes": removed,
+    }
 
 
 # =============================
@@ -731,7 +1291,9 @@ def load_config_from_env_and_args(args: argparse.Namespace) -> Config:
         or WORKFLOW_ID
     )
     api_base_url = str(os.getenv("SIS_API_BASE_URL") or API_BASE_URL)
-    api_token = str(args.token or os.getenv("SIS_API_TOKEN") or API_TOKEN)
+    # Prefer CLI --token, then SIS_API_KEY (recommended), then SIS_API_TOKEN (legacy)
+    token_env = os.getenv("SIS_API_KEY") or os.getenv("SIS_API_TOKEN") or API_TOKEN
+    api_token = str(args.token or token_env)
     source_label = str(args.source_label or os.getenv("SIS_SOURCE_LANGUAGE_LABEL") or SOURCE_LANGUAGE_LABEL)
 
     lm = LANGUAGE_MAP.copy()
@@ -742,8 +1304,8 @@ def load_config_from_env_and_args(args: argparse.Namespace) -> Config:
     dry_run = not bool(args.write) if args.write is not None else (
         (os.getenv("SIS_DRY_RUN") or str(DRY_RUN)).lower() in {"1", "true", "yes"}
     )
-    translator = str(os.getenv("SIS_TRANSLATOR") or TRANSLATOR)
-    translator_api_key = str(os.getenv("SIS_TRANSLATOR_API_KEY") or TRANSLATOR_API_KEY)
+    translator = str(args.translator or os.getenv("SIS_TRANSLATOR") or TRANSLATOR)
+    translator_api_key = str(args.translator_api_key or os.getenv("SIS_TRANSLATOR_API_KEY") or TRANSLATOR_API_KEY)
     rate_limit_qps = float(os.getenv("SIS_RATE_LIMIT_QPS") or RATE_LIMIT_QPS)
     log_level = str(args.log_level or os.getenv("SIS_LOG_LEVEL") or LOG_LEVEL)
 
@@ -768,6 +1330,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--token", help="API bearer token", required=False)
     p.add_argument("--source-label", help="Source language label (e.g., English)", required=False)
     p.add_argument("--log-level", help="Logging level (DEBUG, INFO, ...)", required=False)
+    p.add_argument("--translator", choices=["mock", "deepl", "google"], help="Translation provider", required=False)
+    p.add_argument("--translator-api-key", help="Translator API key for the chosen provider", required=False)
     p.add_argument("--self-test", action="store_true", help="Run self test on sample payload")
     return p
 
@@ -786,7 +1350,14 @@ def process_workflow_pipeline(config: Config) -> None:
     translator = Translator(config.translator, config.translator_api_key, config.rate_limit_qps)
 
     if not config.api_token and not args.self_test:  # type: ignore[name-defined]
-        raise ValueError("API token is required. Provide via --token or SIS_API_TOKEN.")
+        raise ValueError(
+            "API token is required. Provide via --token, or set SIS_API_KEY (preferred) or SIS_API_TOKEN in a .env file."
+        )
+
+    if (not config.workflow_id or str(config.workflow_id).strip() == "") and not args.self_test:  # type: ignore[name-defined]
+        raise ValueError(
+            "Workflow ID is required. Provide via --workflow or set SIS_WORKFLOW_ID in a .env file."
+        )
 
     if args.self_test:  # type: ignore[name-defined]
         workflow, inner = sample_workflow_and_inner()
@@ -796,6 +1367,7 @@ def process_workflow_pipeline(config: Config) -> None:
         logging.info("Fetching workflow %s", redact(config.workflow_id))
         workflow = client.get_workflow(config.workflow_id)
         inner = parse_inner_body(workflow)
+        original_inner = json.loads(json.dumps(inner))
 
     lang_node_id, lang_node = find_language_page(inner)
     logging.info("Language page found: node %s", lang_node_id)
@@ -812,7 +1384,46 @@ def process_workflow_pipeline(config: Config) -> None:
     print_summary(summary)
 
     if not config.dry_run:
+        # Validate before PUT
+        errors, warns = validate_inner(inner)
+        for w in warns:
+            logging.warning("Validation warning: %s", w)
+        if errors:
+            for e in errors:
+                logging.error("Validation error: %s", e)
+            logging.error("Aborting PUT due to validation errors.")
+            return
+
+        # Diff summary
+        try:
+            old_inner = original_inner  # type: ignore[name-defined]
+        except NameError:
+            old_inner = inner
+        diff = diff_summary(old_inner, inner)
+        logging.info("Diff summary: added=%s removed=%s total_nodes=%s", diff.get("added_nodes"), diff.get("removed_nodes"), diff.get("total_nodes"))
+
         # Serialize and PUT
+        # Normalize IDs and link targets to strings for consistency
+        try:
+            nmap = inner.get("nodes") or {}
+            new_nodes: Dict[str, Any] = {}
+            for k, node in list(nmap.items()):
+                sk = str(k)
+                if isinstance(node, dict):
+                    node["id"] = str(node.get("id"))
+                    nxt = node.get("next")
+                    if isinstance(nxt, dict):
+                        for cond in (nxt.get("conditions") or []):
+                            if cond.get("result") is not None:
+                                cond["result"] = str(cond["result"])
+                        if nxt.get("default") is not None:
+                            nxt["default"] = str(nxt["default"])
+                        node["next"] = nxt
+                new_nodes[sk] = node
+            inner["nodes"] = new_nodes
+        except Exception as _:
+            pass
+
         workflow["body"] = json.dumps(inner, separators=(",", ":"))
         if args.self_test:  # type: ignore[name-defined]
             logging.info("Self-test mode: would PUT updated workflow; skipping")
@@ -917,6 +1528,8 @@ def self_test_on_sample() -> None:
 
 
 def main() -> None:
+    # Load .env before reading env variables into config
+    load_env_file(".env")
     parser = build_arg_parser()
     global args  # noqa: PLW0603
     args = parser.parse_args()
