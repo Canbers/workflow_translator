@@ -1,5 +1,31 @@
 ## SIS Workflow Translator
 
+### Translation providers at a glance
+
+Choose a provider based on your constraints. The script supports four modes:
+
+- Mock (default)
+  - Pros: Free, instant, no setup; safe for testing. Shows output like `[es] Hello` so you can see where translations would happen.
+  - Cons: Not real translation; for demos/tests only.
+  - Requirements: None.
+
+- LibreTranslate (local, free)
+  - Pros: Free, no account or billing. Runs entirely on your machine. Auto-starts/stops when needed.
+  - Cons: First run downloads models; uses local CPU/RAM; quality varies by language pair vs commercial APIs.
+  - Requirements: None if you let the script auto-start (uses Docker if installed, else a pip-based server). Optional: install Docker for the simplest one-command setup.
+
+- Google Translate API
+  - Pros: High quality for many languages; scalable and reliable.
+  - Cons: Requires Google Cloud project and billing; paid per character.
+  - Requirements: API key (`SIS_TRANSLATOR_API_KEY`).
+
+- DeepL API
+  - Pros: Excellent quality for supported languages; nuanced tone control.
+  - Cons: Paid; supports fewer languages than Google.
+  - Requirements: API key (`SIS_TRANSLATOR_API_KEY`).
+
+Tip: Start with Mock for a dry run, then switch to LibreTranslate local for free real translations. If you need higher quality or scale, use Google or DeepL.
+
 This tool upgrades a Sign In Solutions (tractionguest.com) workflow to support translated language paths. It finds the language choice page in a workflow, uses the English branch as a template, and creates or updates parallel paths for each existing non-English language choice. In dry-run mode, it shows what would change; in write mode, it updates the workflow via the API.
 
 ### What you need
