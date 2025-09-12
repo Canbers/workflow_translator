@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import html
 import logging
 import os
 import re
@@ -31,9 +32,9 @@ import requests
 # Configuration defaults
 # =============================
 
-WORKFLOW_ID: str | int = 105386
+WORKFLOW_ID: str | int = ""  # must be provided via --workflow or env
 API_BASE_URL: str = "https://us.tractionguest.com"
-API_TOKEN: str = "9862e7559cb7caea89fb50b4700bf89cb741f700b27ba9531418bf231bce4048"
+API_TOKEN: str = ""  # must be provided via --token or env
 SOURCE_LANGUAGE_LABEL: str = "English"
 LANGUAGE_MAP: Dict[str, str] = {"English": "en"}
 DRY_RUN: bool = True
@@ -86,6 +87,35 @@ def setup_logging(level: str) -> None:
         level=numeric_level,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+
+
+# =============================
+# .env loader (no external dependency)
+# =============================
+
+
+def load_env_file(path: str = ".env") -> None:
+    """Load KEY=VALUE pairs from a .env file into os.environ if not already set.
+
+    Lines starting with '#' are comments. Quotes around values are stripped.
+    """
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except Exception as exc:  # noqa: BLE001
+        logging.debug("Could not load .env file: %s", exc)
 
 
 # =============================
@@ -153,7 +183,8 @@ class Translator:
             translations = payload.get("translations", [])
             if not translations:
                 raise RuntimeError("DeepL: empty translations")
-            return translations[0].get("text", text)
+            translated = translations[0].get("text", text)
+            return html.unescape(translated)
         except Exception as exc:  # noqa: BLE001
             logging.warning("DeepL translate error: %s", exc)
             return text
@@ -162,7 +193,7 @@ class Translator:
         self.rate_limiter.wait()
         url = "https://translation.googleapis.com/language/translate/v2"
         params = {"key": self.api_key}
-        data = {"q": text, "target": target_iso}
+        data = {"q": text, "target": target_iso, "format": "text"}
         headers = {"Content-Type": "application/json"}
         try:
             resp = requests.post(url, params=params, json=data, headers=headers, timeout=20)
@@ -173,7 +204,8 @@ class Translator:
             translations = data_obj.get("translations", [])
             if not translations:
                 raise RuntimeError("Google: empty translations")
-            return translations[0].get("translatedText", text)
+            translated = translations[0].get("translatedText", text)
+            return html.unescape(translated)
         except Exception as exc:  # noqa: BLE001
             logging.warning("Google translate error: %s", exc)
             return text
@@ -424,33 +456,298 @@ def iso_from_label(label: str, language_map: Dict[str, str]) -> str:
         return language_map[label]
     normalized = label.strip().lower()
     heuristics = {
+        # English and variants
         "english": "en",
         "en": "en",
+        "en-us": "en-US",
+        "us english": "en-US",
+        "american english": "en-US",
+        "en-gb": "en-GB",
+        "british english": "en-GB",
+        "uk english": "en-GB",
+        "en-ca": "en-CA",
+        "canadian english": "en-CA",
+        "en-au": "en-AU",
+        "australian english": "en-AU",
+        "en-in": "en-IN",
+        "indian english": "en-IN",
+
+        # Spanish and variants
         "spanish": "es",
         "español": "es",
         "espanol": "es",
+        "castellano": "es",
+        "es-es": "es-ES",
+        "spain spanish": "es-ES",
+        "es-mx": "es-MX",
+        "mexican spanish": "es-MX",
+        "es-419": "es-419",
+        "latin american spanish": "es-419",
+        "es-ar": "es-AR",
+
+        # French and variants
         "french": "fr",
         "français": "fr",
         "francais": "fr",
-        "german": "de",
-        "deutsch": "de",
-        "italian": "it",
-        "italiano": "it",
+        "fr-ca": "fr-CA",
+        "canadian french": "fr-CA",
+        "fr-be": "fr-BE",
+        "belgian french": "fr-BE",
+        "fr-ch": "fr-CH",
+        "swiss french": "fr-CH",
+
+        # Portuguese and variants
         "portuguese": "pt",
         "português": "pt",
         "portugues": "pt",
+        "pt-br": "pt-BR",
+        "brazilian portuguese": "pt-BR",
+        "pt-pt": "pt-PT",
+        "european portuguese": "pt-PT",
+
+        # German and variants
+        "german": "de",
+        "deutsch": "de",
+        "de-at": "de-AT",
+        "austrian german": "de-AT",
+        "de-ch": "de-CH",
+        "swiss german": "de-CH",
+
+        # Italian
+        "italian": "it",
+        "italiano": "it",
+
+        # Dutch and Flemish
+        "dutch": "nl",
+        "nederlands": "nl",
+        "vlaams": "nl-BE",
+        "flemish": "nl-BE",
+        "nl-be": "nl-BE",
+
+        # Nordic languages
+        "swedish": "sv",
+        "svenska": "sv",
+        "norwegian": "no",
+        "norsk": "no",
+        "bokmål": "nb",
+        "bokmal": "nb",
+        "nynorsk": "nn",
+        "danish": "da",
+        "dansk": "da",
+        "finnish": "fi",
+        "suomi": "fi",
+        "icelandic": "is",
+        "íslenska": "is",
+        "islenska": "is",
+
+        # Baltic languages
+        "estonian": "et",
+        "eesti": "et",
+        "latvian": "lv",
+        "latviešu": "lv",
+        "lithuanian": "lt",
+        "lietuvių": "lt",
+
+        # Central/Eastern Europe
+        "polish": "pl",
+        "polski": "pl",
+        "czech": "cs",
+        "čeština": "cs",
+        "cestina": "cs",
+        "slovak": "sk",
+        "slovenčina": "sk",
+        "slovencina": "sk",
+        "slovenian": "sl",
+        "slovenščina": "sl",
+        "slovenscina": "sl",
+        "hungarian": "hu",
+        "magyar": "hu",
+        "romanian": "ro",
+        "română": "ro",
+        "romana": "ro",
+        "moldovan": "ro-MD",
+        "bulgarian": "bg",
+        "български": "bg",
+        "greek": "el",
+        "ελληνικά": "el",
+
+        # Balkans
+        "serbian": "sr",
+        "srpski": "sr",
+        "српски": "sr",
+        "croatian": "hr",
+        "hrvatski": "hr",
+        "bosnian": "bs",
+        "bosanski": "bs",
+        "macedonian": "mk",
+        "македонски": "mk",
+        "albanian": "sq",
+        "shqip": "sq",
+
+        # Slavic East
+        "ukrainian": "uk",
+        "українська": "uk",
+        "belarusian": "be",
+        "беларуская": "be",
+        "russian": "ru",
+        "русский": "ru",
+
+        # Caucasus and Central Asia
+        "armenian": "hy",
+        "հայերեն": "hy",
+        "georgian": "ka",
+        "ქართული": "ka",
+        "azerbaijani": "az",
+        "azerbaijan": "az",
+        "azeri": "az",
+        "azərbaycan": "az",
+        "kazakh": "kk",
+        "қазақ": "kk",
+        "uzbek": "uz",
+        "oʻzbekcha": "uz",
+        "ozbekcha": "uz",
+        "tajik": "tg",
+        "tojiki": "tg",
+        "kyrgyz": "ky",
+        "кыргызча": "ky",
+        "turkmen": "tk",
+        "türkmençe": "tk",
+        "turkmence": "tk",
+        "mongolian": "mn",
+        "монгол": "mn",
+
+        # Middle East
+        "turkish": "tr",
+        "türkçe": "tr",
+        "turkce": "tr",
+        "arabic": "ar",
+        "العربية": "ar",
+        "persian": "fa",
+        "farsi": "fa",
+        "فارسی": "fa",
+        "dari": "fa-AF",
+        "pashto": "ps",
+        "پښتو": "ps",
+        "kurdish": "ku",
+        "kurdî": "ku",
+
+        # Hebrew and Yiddish
+        "hebrew": "he",
+        "עברית": "he",
+        "ivrit": "he",
+        "yiddish": "yi",
+        "יידיש": "yi",
+
+        # South Asia
+        "hindi": "hi",
+        "हिंदी": "hi",
+        # Note: Urdu is written right-to-left
+        "urdu": "ur",
+        "اردو": "ur",
+        "bengali": "bn",
+        "bangla": "bn",
+        "বাংলা": "bn",
+        "punjabi": "pa",
+        "panjabi": "pa",
+        "ਪੰਜਾਬੀ": "pa",
+        "gujarati": "gu",
+        "ગુજરાતી": "gu",
+        "marathi": "mr",
+        "मराठी": "mr",
+        "tamil": "ta",
+        "தமிழ்": "ta",
+        "telugu": "te",
+        "తెలుగు": "te",
+        "kannada": "kn",
+        "ಕನ್ನಡ": "kn",
+        "malayalam": "ml",
+        "മലയാളം": "ml",
+        "sinhala": "si",
+        "sinhalese": "si",
+        "සිංහල": "si",
+        "odia": "or",
+        "oriya": "or",
+        "ଓଡ଼ିଆ": "or",
+        "assamese": "as",
+        "অসমীয়া": "as",
+        "nepali": "ne",
+        "नेपाली": "ne",
+
+        # Southeast Asia
+        "burmese": "my",
+        "myanmar": "my",
+        "မြန်မာ": "my",
+        "khmer": "km",
+        "cambodian": "km",
+        "ខ្មែរ": "km",
+        "lao": "lo",
+        "ລາວ": "lo",
+        "thai": "th",
+        "ไทย": "th",
+        "vietnamese": "vi",
+        "tiếng việt": "vi",
+        "tieng viet": "vi",
+        "indonesian": "id",
+        "bahasa indonesia": "id",
+        "bahasa": "id",
+        "malay": "ms",
+        "bahasa melayu": "ms",
+        "melayu": "ms",
+        "filipino": "fil",
+        "tagalog": "fil",
+        "tl": "tl",
+
+        # East Asia
         "japanese": "ja",
+        "nihongo": "ja",
         "日本語": "ja",
-        "chinese": "zh",
-        "中文": "zh",
-        "简体中文": "zh-CN",
-        "繁體中文": "zh-TW",
+        "にほんご": "ja",
         "korean": "ko",
         "한국어": "ko",
-        "arabic": "ar",
-        "русский": "ru",
-        "russian": "ru",
-        "hindi": "hi",
+        "조선말": "ko",
+        "chinese": "zh",
+        "中文": "zh",
+        "simplified chinese": "zh-CN",
+        "traditional chinese": "zh-TW",
+        "简体中文": "zh-CN",
+        "繁體中文": "zh-TW",
+        "zh-cn": "zh-CN",
+        "zh-tw": "zh-TW",
+        "zh-hk": "zh-HK",
+        "cantonese": "zh-HK",
+        "粤语": "zh-HK",
+        "粵語": "zh-HK",
+
+        # Africa
+        "afrikaans": "af",
+        "hausa": "ha",
+        "igbo": "ig",
+        "yoruba": "yo",
+        "swahili": "sw",
+        "kiswahili": "sw",
+        "amharic": "am",
+        "አማርኛ": "am",
+        "somali": "so",
+        "af-soomaali": "so",
+        "zulu": "zu",
+        "xhosa": "xh",
+        "sesotho": "st",
+        "setswana": "tn",
+        "tswana": "tn",
+        "shona": "sn",
+        "malagasy": "mg",
+
+        # Americas and Pacific
+        "haitian creole": "ht",
+        "kreyòl ayisyen": "ht",
+        "maori": "mi",
+        "te reo māori": "mi",
+        "te reo maori": "mi",
+        "samoan": "sm",
+        "gagana sāmoa": "sm",
+        "tongan": "to",
+        "lea fakatonga": "to",
+        "fijian": "fj",
     }
     return heuristics.get(normalized, normalized[:2] if len(normalized) >= 2 else "")
 
@@ -494,6 +791,15 @@ def translate_node_strings(
             translated_count += 1
         return out
 
+    template_id = str(node.get("template_id") or "")
+    # Determine which keys are considered translatable for this node type
+    translatable_keys_for_node: Set[str] = set(TRANSLATABLE_KEYS)
+    # For auto-routing pages, never translate any 'title' fields (admin-only),
+    # but ensure 'loading' may be translated via labels handling below.
+    if template_id in {"invitecheck", "watchlistcheck", "hostcheck"}:
+        if "title" in translatable_keys_for_node:
+            translatable_keys_for_node.remove("title")
+
     def translate_conf_value(value: Any, parent_key: Optional[str] = None, ancestor_translatable: bool = False) -> Any:
         # Only translate user-visible strings. Never translate any 'data_name'.
         if isinstance(value, dict):
@@ -502,8 +808,8 @@ def translate_node_strings(
                 if k == "data_name" or k == "name":
                     out[k] = v
                     continue
-                current_translatable = ancestor_translatable or (k in TRANSLATABLE_KEYS)
-                if isinstance(v, str) and (k in TRANSLATABLE_KEYS or ancestor_translatable):
+                current_translatable = ancestor_translatable or (k in translatable_keys_for_node)
+                if isinstance(v, str) and (k in translatable_keys_for_node or ancestor_translatable):
                     out[k] = translate_string(v)
                 else:
                     out[k] = translate_conf_value(v, k, current_translatable)
@@ -524,10 +830,17 @@ def translate_node_strings(
         return value
 
     # Translate labels
+    label_keys_to_translate: Set[str] = set(TRANSLATABLE_KEYS)
+    # Special case: for invitecheck and watchlistcheck, do NOT translate 'title';
+    # instead translate 'loading'.
+    if template_id in {"invitecheck", "watchlistcheck", "hostcheck"}:
+        label_keys_to_translate.add("loading")
+        if "title" in label_keys_to_translate:
+            label_keys_to_translate.remove("title")
     labels = node.get("labels")
     if isinstance(labels, dict):
         for key in list(labels.keys()):
-            if key in TRANSLATABLE_KEYS and isinstance(labels.get(key), str):
+            if key in label_keys_to_translate and isinstance(labels.get(key), str):
                 labels[key] = translate_string(labels[key])
 
     # Translate configuration strings (only user-visible; exclude identifiers like data_name)
@@ -978,7 +1291,9 @@ def load_config_from_env_and_args(args: argparse.Namespace) -> Config:
         or WORKFLOW_ID
     )
     api_base_url = str(os.getenv("SIS_API_BASE_URL") or API_BASE_URL)
-    api_token = str(args.token or os.getenv("SIS_API_TOKEN") or API_TOKEN)
+    # Prefer CLI --token, then SIS_API_KEY (recommended), then SIS_API_TOKEN (legacy)
+    token_env = os.getenv("SIS_API_KEY") or os.getenv("SIS_API_TOKEN") or API_TOKEN
+    api_token = str(args.token or token_env)
     source_label = str(args.source_label or os.getenv("SIS_SOURCE_LANGUAGE_LABEL") or SOURCE_LANGUAGE_LABEL)
 
     lm = LANGUAGE_MAP.copy()
@@ -1035,7 +1350,14 @@ def process_workflow_pipeline(config: Config) -> None:
     translator = Translator(config.translator, config.translator_api_key, config.rate_limit_qps)
 
     if not config.api_token and not args.self_test:  # type: ignore[name-defined]
-        raise ValueError("API token is required. Provide via --token or SIS_API_TOKEN.")
+        raise ValueError(
+            "API token is required. Provide via --token, or set SIS_API_KEY (preferred) or SIS_API_TOKEN in a .env file."
+        )
+
+    if (not config.workflow_id or str(config.workflow_id).strip() == "") and not args.self_test:  # type: ignore[name-defined]
+        raise ValueError(
+            "Workflow ID is required. Provide via --workflow or set SIS_WORKFLOW_ID in a .env file."
+        )
 
     if args.self_test:  # type: ignore[name-defined]
         workflow, inner = sample_workflow_and_inner()
@@ -1206,6 +1528,8 @@ def self_test_on_sample() -> None:
 
 
 def main() -> None:
+    # Load .env before reading env variables into config
+    load_env_file(".env")
     parser = build_arg_parser()
     global args  # noqa: PLW0603
     args = parser.parse_args()
