@@ -22,6 +22,8 @@ import os
 import re
 import sys
 import time
+import subprocess
+import atexit
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -266,6 +268,41 @@ def detect_local_libretranslate_endpoint() -> Optional[str]:
                 return f"{base}/translate"
         except Exception:  # noqa: BLE001
             continue
+    return None
+
+
+def _helper_script_path() -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(here, "run_local_libretranslate.sh")
+
+
+def start_local_libretranslate_if_needed(port: int = 5000) -> Optional[str]:
+    """Ensure a local LibreTranslate is running; start via helper if not.
+
+    Returns the translate endpoint URL if successful, else None.
+    Registers an atexit handler to stop it if we started it.
+    """
+    ep = detect_local_libretranslate_endpoint()
+    if ep:
+        return ep
+    script = _helper_script_path()
+    if not os.path.exists(script):
+        logging.debug("Helper script not found: %s", script)
+        return None
+    try:
+        logging.info("Starting local LibreTranslate (auto) on port %s", port)
+        subprocess.run([script, "start", str(port)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Wait for readiness
+        for _ in range(45):
+            ep2 = detect_local_libretranslate_endpoint()
+            if ep2:
+                # Register stop at exit
+                atexit.register(lambda: subprocess.run([script, "stop", str(port)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+                return ep2
+            time.sleep(1.0)
+        logging.warning("Local LibreTranslate did not become ready in time")
+    except Exception as exc:  # noqa: BLE001
+        logging.debug("Failed to start local LibreTranslate: %s", exc)
     return None
 
 
@@ -1416,7 +1453,13 @@ def process_workflow_pipeline(config: Config) -> None:
             logging.info("Using local LibreTranslate at %s", autodetected)
             endpoint = autodetected
         else:
-            endpoint = ""  # fall back to default in translator
+            # Try to auto-start a local instance
+            started = start_local_libretranslate_if_needed(port=5000)
+            if started:
+                logging.info("Auto-started local LibreTranslate at %s", started)
+                endpoint = started
+            else:
+                endpoint = ""  # fall back to default in translator
 
     translator = Translator(config.translator, config.translator_api_key, config.rate_limit_qps, endpoint=endpoint)
 

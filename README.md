@@ -143,6 +143,14 @@ python3 sis_translate_workflow.py --translator libretranslate \
 bash run_local_libretranslate.sh stop
 ```
 
+### Auto-start/stop local LibreTranslate
+
+If you run with `--translator libretranslate` and no `--translator-endpoint` is provided, the script will:
+- First try to connect to `http://localhost:5000/translate`.
+- If not found, it will attempt to auto-start a local LibreTranslate using `run_local_libretranslate.sh` (Docker if available, otherwise pip) and will auto-stop it when the script exits.
+
+To disable auto-start behavior, explicitly set a public endpoint via `--translator-endpoint` or `SIS_TRANSLATOR_ENDPOINT`.
+
 - **Rate limiting** (requests per second; default 8):
 ```bash
 SIS_RATE_LIMIT_QPS=6
