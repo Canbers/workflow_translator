@@ -105,14 +105,22 @@ If not set, common languages are inferred by label.
 
 - **Select a translator**
   - Default is `mock` (safe testing): it wraps text like `[es] Hello`.
-  - To use Google Translate or DeepL, set provider and API key in `.env`:
+  - To use Google Translate, DeepL, or LibreTranslate, set provider and credentials in `.env`:
 ```bash
 SIS_TRANSLATOR=google
 SIS_TRANSLATOR_API_KEY="<GOOGLE_API_KEY>"
 # or
 SIS_TRANSLATOR=deepl
 SIS_TRANSLATOR_API_KEY="<DEEPL_API_KEY>"
+# or
+SIS_TRANSLATOR=libretranslate
+# Optional if your instance requires it:
+SIS_TRANSLATOR_API_KEY="<LIBRETRANSLATE_API_KEY>"
+# Optional custom endpoint (defaults to https://libretranslate.com/translate):
+SIS_TRANSLATOR_ENDPOINT="https://your-libretranslate.example.com/translate"
 ```
+
+When using `libretranslate`, the script will send requests to the endpoint above with JSON payloads. If `SIS_TRANSLATOR_ENDPOINT` is not set, it uses `https://libretranslate.com/translate`. If your instance requires an API key, set `SIS_TRANSLATOR_API_KEY`.
 
 - **Rate limiting** (requests per second; default 8):
 ```bash

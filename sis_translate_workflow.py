@@ -38,10 +38,13 @@ API_TOKEN: str = ""  # must be provided via --token or env
 SOURCE_LANGUAGE_LABEL: str = "English"
 LANGUAGE_MAP: Dict[str, str] = {"English": "en"}
 DRY_RUN: bool = True
-TRANSLATOR: str = "mock"  # "deepl", "google", or "mock"
+TRANSLATOR: str = "mock"  # "deepl", "google", "libretranslate", or "mock"
 TRANSLATOR_API_KEY: str = ""
 RATE_LIMIT_QPS: float = 8.0
 LOG_LEVEL: str = "INFO"
+
+# Optional translator-specific settings
+TRANSLATOR_ENDPOINT: str = ""  # e.g., LibreTranslate endpoint
 
 
 # =============================
@@ -59,6 +62,7 @@ class Config:
     dry_run: bool
     translator: str
     translator_api_key: str
+    translator_endpoint: str
     rate_limit_qps: float
     log_level: str
 
@@ -144,12 +148,13 @@ class RateLimiter:
 
 
 class Translator:
-    def __init__(self, provider: str, api_key: str, qps: float) -> None:
+    def __init__(self, provider: str, api_key: str, qps: float, endpoint: str = "") -> None:
         self.provider = provider.lower()
         self.api_key = api_key
         self.rate_limiter = RateLimiter(qps)
+        self.endpoint = endpoint
 
-        if self.provider not in {"mock", "deepl", "google"}:
+        if self.provider not in {"mock", "deepl", "google", "libretranslate"}:
             raise ValueError(f"Unsupported translator provider: {provider}")
         if self.provider in {"deepl", "google"} and not self.api_key:
             raise ValueError("Translator API key is required for non-mock providers.")
@@ -163,6 +168,8 @@ class Translator:
             return self._translate_deepl(text, target_iso)
         if self.provider == "google":
             return self._translate_google(text, target_iso)
+        if self.provider == "libretranslate":
+            return self._translate_libretranslate(text, target_iso)
         raise ValueError(f"Unsupported provider: {self.provider}")
 
     def _translate_deepl(self, text: str, target_iso: str) -> str:
@@ -208,6 +215,34 @@ class Translator:
             return html.unescape(translated)
         except Exception as exc:  # noqa: BLE001
             logging.warning("Google translate error: %s", exc)
+            return text
+
+    def _translate_libretranslate(self, text: str, target_iso: str) -> str:
+        # LibreTranslate typically uses two-letter lowercase codes (e.g., 'es').
+        target_lang = target_iso.split("-")[0].lower()
+        self.rate_limiter.wait()
+        url = self.endpoint.strip() or "https://libretranslate.com/translate"
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "q": text,
+            "source": "auto",
+            "target": target_lang,
+            "format": "text",
+        }
+        # Some instances require an API key; include if provided
+        if self.api_key:
+            data["api_key"] = self.api_key
+        try:
+            resp = requests.post(url, json=data, headers=headers, timeout=20)
+            if resp.status_code != 200:
+                raise RuntimeError(f"LibreTranslate HTTP {resp.status_code}: {resp.text[:200]}")
+            payload = resp.json()
+            translated = payload.get("translatedText") or payload.get("translation")
+            if not translated:
+                raise RuntimeError("LibreTranslate: missing 'translatedText'")
+            return html.unescape(str(translated))
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("LibreTranslate translate error: %s", exc)
             return text
 
 
@@ -1306,6 +1341,7 @@ def load_config_from_env_and_args(args: argparse.Namespace) -> Config:
     )
     translator = str(args.translator or os.getenv("SIS_TRANSLATOR") or TRANSLATOR)
     translator_api_key = str(args.translator_api_key or os.getenv("SIS_TRANSLATOR_API_KEY") or TRANSLATOR_API_KEY)
+    translator_endpoint = str(args.translator_endpoint or os.getenv("SIS_TRANSLATOR_ENDPOINT") or TRANSLATOR_ENDPOINT)
     rate_limit_qps = float(os.getenv("SIS_RATE_LIMIT_QPS") or RATE_LIMIT_QPS)
     log_level = str(args.log_level or os.getenv("SIS_LOG_LEVEL") or LOG_LEVEL)
 
@@ -1320,6 +1356,7 @@ def load_config_from_env_and_args(args: argparse.Namespace) -> Config:
         translator_api_key=translator_api_key,
         rate_limit_qps=rate_limit_qps,
         log_level=log_level,
+        translator_endpoint=translator_endpoint,
     )
 
 
@@ -1330,8 +1367,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--token", help="API bearer token", required=False)
     p.add_argument("--source-label", help="Source language label (e.g., English)", required=False)
     p.add_argument("--log-level", help="Logging level (DEBUG, INFO, ...)", required=False)
-    p.add_argument("--translator", choices=["mock", "deepl", "google"], help="Translation provider", required=False)
+    p.add_argument("--translator", choices=["mock", "deepl", "google", "libretranslate"], help="Translation provider", required=False)
     p.add_argument("--translator-api-key", help="Translator API key for the chosen provider", required=False)
+    p.add_argument("--translator-endpoint", help="Translator endpoint URL (e.g., LibreTranslate instance)", required=False)
     p.add_argument("--self-test", action="store_true", help="Run self test on sample payload")
     return p
 
