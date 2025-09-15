@@ -9,6 +9,52 @@ This tool upgrades a Sign In Solutions (tractionguest.com) workflow to support t
 - Internet access to `https://us.tractionguest.com`
 
 
+## Two ways to run this tool
+
+### 🌐 Option 1: Web App (Recommended for most users)
+
+**Easiest way - just double-click and go!**
+
+The web app provides a simple point-and-click interface where you can:
+- Enter your configuration details in a form
+- See live logs as the translation runs
+- View results in a clean summary
+
+**Quick start:**
+1. Download this project folder
+2. **Mac users:** Double-click `Launch_SIS_Translator.command`
+3. **Windows users:** Double-click `Launch_SIS_Translator.bat`
+4. The app opens in your browser automatically
+5. Fill in your Workflow ID and API token, then click "Run"
+
+**Manual launch (if needed):**
+```bash
+# First time setup
+bash activate.sh
+
+# Launch the web app
+source .venv/bin/activate
+streamlit run streamlit_app.py
+```
+
+### 💻 Option 2: Command Line Script (For advanced users)
+
+**For users comfortable with terminal commands**
+
+Run the Python script directly with command-line arguments for more control and automation.
+
+**Quick start:**
+```bash
+# First time setup
+bash activate.sh
+
+# Edit .env file with your settings
+# Then run:
+python3 sis_translate_workflow.py --write
+```
+
+---
+
 ### Translation providers at a glance
 
 Choose a provider based on your constraints. The script supports four modes:
@@ -38,7 +84,9 @@ Tip: Start with Mock for a dry run, then switch to LibreTranslate local for free
 
 
 
-### Quick start (easiest)
+## Detailed setup instructions
+
+### First time setup (both options)
 
 1) Run the one-time setup script
 ```bash
@@ -54,6 +102,8 @@ SIS_WORKFLOW_ID=123456
 Notes:
 - `SIS_API_KEY` is preferred. `SIS_API_TOKEN` also works for backward compatibility.
 - The script auto-loads `.env` every run; you do not need to export variables manually.
+
+### Command line script detailed usage
 
 3) Try a safe self-test
 ```bash
@@ -236,4 +286,3 @@ Write changes with CLI token and verbose logs:
 ```bash
 python3 sis_translate_workflow.py --token "<TOKEN>" --write --log-level DEBUG
 ```
-
