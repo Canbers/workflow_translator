@@ -1,0 +1,254 @@
+{
+  "id": "example-registration-experience",
+  "name": "Example Registration Experience",
+  "body": {
+    "nodes": {
+      "1": {
+        "id": "1",
+        "type": "page",
+        "template_id": "branch",
+        "configuration": {
+          "flex_field": "language",
+          "branches": [
+            {"value": "English"},
+            {"value": "Spanish"},
+            {"value": "French"}
+          ]
+        },
+        "next": {
+          "conditions": [
+            {"result": "2"},
+            {"result": "3"},
+            {"result": "4"}
+          ],
+          "default": "2"
+        }
+      },
+      "2": {
+        "id": "2",
+        "type": "page",
+        "template_id": "form",
+        "configuration": {
+          "page_message": "Welcome! Please fill out the form below.",
+          "page_sub_message": "All fields are required.",
+          "back_button_text": "Back",
+          "next_button_text": "Continue",
+          "fields": [
+            {
+              "title": "First Name",
+              "label": "Enter your first name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "title": "Last Name", 
+              "label": "Enter your last name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "title": "Email",
+              "label": "Enter your email address",
+              "type": "email",
+              "required": true
+            }
+          ]
+        },
+        "next": {
+          "default": "5"
+        }
+      },
+      "3": {
+        "id": "3",
+        "type": "page",
+        "template_id": "form",
+        "configuration": {
+          "page_message": "¡Bienvenido! Por favor complete el formulario a continuación.",
+          "page_sub_message": "Todos los campos son obligatorios.",
+          "back_button_text": "Atrás",
+          "next_button_text": "Continuar",
+          "fields": [
+            {
+              "title": "Nombre",
+              "label": "Ingrese su nombre",
+              "type": "text",
+              "required": true
+            },
+            {
+              "title": "Apellido",
+              "label": "Ingrese su apellido", 
+              "type": "text",
+              "required": true
+            },
+            {
+              "title": "Correo electrónico",
+              "label": "Ingrese su dirección de correo electrónico",
+              "type": "email",
+              "required": true
+            }
+          ]
+        },
+        "next": {
+          "default": "5"
+        }
+      },
+      "4": {
+        "id": "4",
+        "type": "page",
+        "template_id": "form",
+        "configuration": {
+          "page_message": "Bienvenue! Veuillez remplir le formulaire ci-dessous.",
+          "page_sub_message": "Tous les champs sont obligatoires.",
+          "back_button_text": "Retour",
+          "next_button_text": "Continuer",
+          "fields": [
+            {
+              "title": "Prénom",
+              "label": "Entrez votre prénom",
+              "type": "text",
+              "required": true
+            },
+            {
+              "title": "Nom de famille",
+              "label": "Entrez votre nom de famille",
+              "type": "text", 
+              "required": true
+            },
+            {
+              "title": "Email",
+              "label": "Entrez votre adresse email",
+              "type": "email",
+              "required": true
+            }
+          ]
+        },
+        "next": {
+          "default": "5"
+        }
+      },
+      "5": {
+        "id": "5",
+        "type": "page",
+        "template_id": "branch",
+        "configuration": {
+          "flex_field": "department",
+          "page_message": "Please select your department:",
+          "branches": [
+            {"value": "Engineering"},
+            {"value": "Marketing"},
+            {"value": "Sales"},
+            {"value": "HR"}
+          ]
+        },
+        "next": {
+          "conditions": [
+            {"result": "6"},
+            {"result": "7"},
+            {"result": "8"},
+            {"result": "9"}
+          ],
+          "default": "6"
+        }
+      },
+      "6": {
+        "id": "6",
+        "type": "page",
+        "template_id": "form",
+        "configuration": {
+          "page_message": "Engineering Department Registration",
+          "page_sub_message": "Please provide additional information for the Engineering department.",
+          "back_button_text": "Back",
+          "next_button_text": "Submit",
+          "fields": [
+            {
+              "title": "Technical Skills",
+              "label": "List your technical skills",
+              "type": "textarea",
+              "required": false
+            }
+          ]
+        },
+        "next": {
+          "default": "10"
+        }
+      },
+      "7": {
+        "id": "7",
+        "type": "page",
+        "template_id": "form",
+        "configuration": {
+          "page_message": "Marketing Department Registration",
+          "page_sub_message": "Please provide additional information for the Marketing department.",
+          "back_button_text": "Back",
+          "next_button_text": "Submit",
+          "fields": [
+            {
+              "title": "Marketing Experience",
+              "label": "Describe your marketing experience",
+              "type": "textarea",
+              "required": false
+            }
+          ]
+        },
+        "next": {
+          "default": "10"
+        }
+      },
+      "8": {
+        "id": "8",
+        "type": "page",
+        "template_id": "form",
+        "configuration": {
+          "page_message": "Sales Department Registration",
+          "page_sub_message": "Please provide additional information for the Sales department.",
+          "back_button_text": "Back",
+          "next_button_text": "Submit",
+          "fields": [
+            {
+              "title": "Sales Experience",
+              "label": "Describe your sales experience",
+              "type": "textarea",
+              "required": false
+            }
+          ]
+        },
+        "next": {
+          "default": "10"
+        }
+      },
+      "9": {
+        "id": "9",
+        "type": "page",
+        "template_id": "form",
+        "configuration": {
+          "page_message": "HR Department Registration",
+          "page_sub_message": "Please provide additional information for the HR department.",
+          "back_button_text": "Back",
+          "next_button_text": "Submit",
+          "fields": [
+            {
+              "title": "HR Experience",
+              "label": "Describe your HR experience",
+              "type": "textarea",
+              "required": false
+            }
+          ]
+        },
+        "next": {
+          "default": "10"
+        }
+      },
+      "10": {
+        "id": "10",
+        "type": "page",
+        "template_id": "form",
+        "configuration": {
+          "page_message": "Registration Complete!",
+          "page_sub_message": "Thank you for registering. You will receive a confirmation email shortly.",
+          "back_button_text": "Back",
+          "next_button_text": "Finish"
+        }
+      }
+    }
+  }
+}

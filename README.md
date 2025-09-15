@@ -1,13 +1,42 @@
 ## SIS Workflow Translator
 
-This tool upgrades a Sign In Solutions (tractionguest.com) workflow to support translated language paths. It finds the language choice page in a workflow, uses the English branch as a template, and creates or updates parallel paths for each existing non-English language choice. In dry-run mode, it shows what would change; in write mode, it updates the workflow via the API.
+This tool upgrades a Sign In Solutions (tractionguest.com) workflow or registration experience to support translated language paths. It finds the language choice page in a workflow/experience, uses the English branch as a template, and creates or updates parallel paths for each existing non-English language choice. In dry-run mode, it shows what would change; in write mode, it updates the workflow/experience via the API.
+
+**Supports both:**
+- **Kiosk Workflows** (traditional workflows at `/workflows/` endpoint)
+- **Registration Experiences** (new registration flows at `/experiences/` endpoint)
+
+### Key Features
+
+- **Dual Experience Support**: Works with both kiosk workflows and registration experiences
+- **Automatic Language Detection**: Finds language choice pages using different strategies for each experience type
+- **Smart Translation**: Translates user-visible strings while preserving structural data
+- **Registration-Specific Fields**: Handles registration-specific fields like `page_message`, `page_sub_message`, form fields, and branch values
+- **Dry Run Mode**: Preview changes before applying them
+- **Web Interface**: Easy-to-use web app for non-technical users
+- **Command Line**: Full-featured CLI for advanced users and automation
+
+### Experience Types
+
+#### Kiosk Workflows
+- **API Endpoint**: `/workflows/{id}`
+- **Language Page**: Uses `template_id: "visitreason"` with `data_name: "language"`
+- **Language Choices**: Stored in `configuration.reasons` array with `id` and `title` fields
+- **Body Format**: JSON string in `workflow.body`
+- **Translation Fields**: Standard workflow fields like `title`, `label`, `placeholder`, etc.
+
+#### Registration Experiences  
+- **API Endpoint**: `/experiences/{id}`
+- **Language Page**: Uses `template_id: "branch"` with `flex_field: "language"`
+- **Language Choices**: Stored in `configuration.branches` array with `value` field
+- **Body Format**: JSON object in `experience.body`
+- **Translation Fields**: Registration-specific fields like `page_message`, `page_sub_message`, `back_button_text`, `next_button_text`, form field labels, etc.
 
 ### What you need
 
 - **Python 3.10+**
 - An SIS **API token** (Bearer token)
 - Internet access to `https://us.tractionguest.com`
-
 
 ## Two ways to run this tool
 
@@ -16,6 +45,7 @@ This tool upgrades a Sign In Solutions (tractionguest.com) workflow to support t
 **Easiest way - just double-click and go!**
 
 The web app provides a simple point-and-click interface where you can:
+- Choose between Kiosk workflows or Registration experiences
 - Enter your configuration details in a form
 - See live logs as the translation runs
 - View results in a clean summary
@@ -51,11 +81,32 @@ bash activate.sh
 # Edit .env file with your settings
 # Then run:
 python3 sis_translate_workflow.py --write
+# For registration experiences:
+python3 sis_translate_workflow.py --write --experience-type registration
 ```
 
 ---
 
-### Translation providers at a glance
+## Experience Types
+
+### Kiosk Workflows (Default)
+- **API Endpoint:** `/workflows/{id}`
+- **Language Page:** Template ID `visitreason` with `data_name: "language"`
+- **Data Format:** `body` is a JSON string
+- **Translation Fields:** Standard workflow fields like `title`, `message`, `back`, `forward`, etc.
+
+### Registration Experiences
+- **API Endpoint:** `/experiences/{id}`
+- **Language Page:** Template ID `branch` with `flex_field: "language"`
+- **Data Format:** `body` is a JSON object
+- **Translation Fields:** Registration-specific fields:
+  - Page fields: `page_message`, `page_sub_message`, `back_button_text`, `next_button_text`
+  - Form fields: `configuration.fields.title`, `configuration.fields.options[].option`
+  - Branch fields: `configuration.branches[].value` (except language choices)
+
+---
+
+## Translation providers at a glance
 
 Choose a provider based on your constraints. The script supports four modes:
 
@@ -80,7 +131,6 @@ Choose a provider based on your constraints. The script supports four modes:
   - Requirements: API key (`SIS_TRANSLATOR_API_KEY`).
 
 Tip: Start with Mock for a dry run, then switch to LibreTranslate local for free real translations. If you need higher quality or scale, use Google or DeepL.
-
 
 
 

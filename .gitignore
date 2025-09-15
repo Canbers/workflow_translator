@@ -11,3 +11,11 @@ GeneratedWorkflowProgress.json
 # Generated workflow artifacts
 GeneratedWorkflowProgress.json
 ValidWorkflowExample.json
+ExampleRegistrationExperience.json
+
+# LibreTranslate service files
+.lt/
+.lt_service/
+
+# Database files
+db/

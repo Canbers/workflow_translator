@@ -42,8 +42,10 @@ LANGUAGE_MAP: Dict[str, str] = {"English": "en"}
 DRY_RUN: bool = True
 TRANSLATOR: str = "mock"  # "deepl", "google", "libretranslate", or "mock"
 TRANSLATOR_API_KEY: str = ""
+TRANSLATOR_ENDPOINT: str = ""
 RATE_LIMIT_QPS: float = 8.0
 LOG_LEVEL: str = "INFO"
+EXPERIENCE_TYPE: str = "kiosk"  # "kiosk" or "registration"
 
 # Optional translator-specific settings
 TRANSLATOR_ENDPOINT: str = ""  # e.g., LibreTranslate endpoint
@@ -67,6 +69,7 @@ class Config:
     translator_endpoint: str
     rate_limit_qps: float
     log_level: str
+    experience_type: str  # "kiosk" or "registration"
 
 
 @dataclass
@@ -381,9 +384,10 @@ def is_only_tokens_or_whitespace(text: str) -> bool:
 
 
 class SISClient:
-    def __init__(self, base_url: str, token: str) -> None:
+    def __init__(self, base_url: str, token: str, experience_type: str = "kiosk") -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self.experience_type = experience_type
         self.session = requests.Session()
         self.session.headers.update({
             "Authorization": f"Bearer {self.token}",
@@ -391,7 +395,11 @@ class SISClient:
         })
 
     def get_workflow(self, workflow_id: str) -> Dict[str, Any]:
-        url = f"{self.base_url}/workflows/{workflow_id}"
+        if self.experience_type == "registration":
+            url = f"{self.base_url}/experiences/{workflow_id}"
+        else:
+            url = f"{self.base_url}/workflows/{workflow_id}"
+        
         resp = self.session.get(url, timeout=30)
         if resp.status_code == 401:
             raise PermissionError("API unauthorized (401)")
@@ -402,26 +410,48 @@ class SISClient:
         if resp.status_code >= 400:
             raise RuntimeError(f"GET failed: HTTP {resp.status_code}: {resp.text[:200]}")
         payload = resp.json()
-        if not isinstance(payload, dict) or "workflow" not in payload:
-            raise ValueError("Unexpected API response shape: missing 'workflow'")
-        return payload["workflow"]
+        
+        if self.experience_type == "registration":
+            # Registration experiences are returned directly, not wrapped in an "experience" key
+            if not isinstance(payload, dict) or "id" not in payload:
+                raise ValueError("Unexpected API response shape: missing 'id' field")
+            return payload
+        else:
+            if not isinstance(payload, dict) or "workflow" not in payload:
+                raise ValueError("Unexpected API response shape: missing 'workflow'")
+            return payload["workflow"]
 
     def put_workflow(self, workflow: Dict[str, Any]) -> None:
         workflow_id = str(workflow.get("id") or workflow.get("workflow_id") or "")
-        url = f"{self.base_url}/workflows/{workflow_id}"
-        resp = self.session.put(url, data=json.dumps({"workflow": workflow}), timeout=60)
+        
+        if self.experience_type == "registration":
+            url = f"{self.base_url}/experiences/{workflow_id}"
+            # Registration experiences are sent directly, not wrapped in an "experience" key
+            resp = self.session.put(url, data=json.dumps(workflow), timeout=60)
+        else:
+            url = f"{self.base_url}/workflows/{workflow_id}"
+            resp = self.session.put(url, data=json.dumps({"workflow": workflow}), timeout=60)
         if resp.status_code >= 400:
             raise RuntimeError(f"PUT failed: HTTP {resp.status_code}: {resp.text[:500]}")
 
 
-def parse_inner_body(workflow: Dict[str, Any]) -> Dict[str, Any]:
-    body_str = workflow.get("body")
-    if not isinstance(body_str, str) or body_str.strip() == "":
-        raise ValueError("Workflow 'body' missing or not a string")
-    try:
-        inner = json.loads(body_str)
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError("Failed to parse workflow.body as JSON") from exc
+def parse_inner_body(workflow: Dict[str, Any], experience_type: str = "kiosk") -> Dict[str, Any]:
+    body = workflow.get("body")
+    
+    if experience_type == "registration":
+        # Registration experiences have body as a JSON object
+        if not isinstance(body, dict):
+            raise ValueError("Registration experience 'body' must be a JSON object")
+        inner = body
+    else:
+        # Kiosk workflows have body as a JSON string
+        if not isinstance(body, str) or body.strip() == "":
+            raise ValueError("Kiosk workflow 'body' missing or not a string")
+        try:
+            inner = json.loads(body)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("Failed to parse workflow.body as JSON") from exc
+    
     if not isinstance(inner, dict) or "nodes" not in inner:
         raise ValueError("Inner body missing 'nodes'")
     return inner
@@ -432,50 +462,81 @@ def parse_inner_body(workflow: Dict[str, Any]) -> Dict[str, Any]:
 # =============================
 
 
-def find_language_page(inner: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+def find_language_page(inner: Dict[str, Any], experience_type: str = "kiosk") -> Tuple[str, Dict[str, Any]]:
     for node_id, node in inner.get("nodes", {}).items():
         if node.get("type") == "page":
             config = node.get("configuration", {}) or {}
-            if config.get("data_name") == "language":
-                return str(node_id), node
-    raise ValueError("Language page with configuration.data_name == 'language' not found")
+            if experience_type == "registration":
+                # Registration experiences use template_id "branch" and flex_field "language"
+                if (node.get("template_id") == "branch" and 
+                    config.get("flex_field") == "language"):
+                    return str(node_id), node
+            else:
+                # Kiosk workflows use template_id "visitreason" and data_name "language"
+                if config.get("data_name") == "language":
+                    return str(node_id), node
+    raise ValueError(f"Language page not found for {experience_type} experience")
 
 
-def build_choice_maps(language_node: Dict[str, Any]) -> Tuple[Dict[int, str], Dict[str, int]]:
-    reasons = (language_node.get("configuration") or {}).get("reasons") or []
-    id_to_label: Dict[int, str] = {}
-    label_to_id: Dict[str, int] = {}
-    for r in reasons:
-        try:
-            rid = int(r.get("id"))
-        except Exception:  # noqa: BLE001
-            continue
-        label = str(r.get("title") or r.get("label") or "").strip()
-        if label:
-            id_to_label[rid] = label
-            label_to_id[label] = rid
+def build_choice_maps(language_node: Dict[str, Any], experience_type: str = "kiosk") -> Tuple[Dict[int, str], Dict[str, int]]:
+    config = language_node.get("configuration") or {}
+    
+    if experience_type == "registration":
+        # Registration experiences use "branches" with "value" field
+        branches = config.get("branches") or []
+        id_to_label: Dict[int, str] = {}
+        label_to_id: Dict[str, int] = {}
+        for i, branch in enumerate(branches):
+            label = str(branch.get("value") or "").strip()
+            if label:
+                id_to_label[i] = label
+                label_to_id[label] = i
+    else:
+        # Kiosk workflows use "reasons" with "id" field
+        reasons = config.get("reasons") or []
+        id_to_label: Dict[int, str] = {}
+        label_to_id: Dict[str, int] = {}
+        for r in reasons:
+            try:
+                rid = int(r.get("id"))
+            except Exception:  # noqa: BLE001
+                continue
+            label = str(r.get("title") or r.get("label") or "").strip()
+            if label:
+                id_to_label[rid] = label
+                label_to_id[label] = rid
+    
     if not id_to_label:
-        raise ValueError("Language page has no reasons/choices")
+        raise ValueError(f"Language page has no choices for {experience_type} experience")
     return id_to_label, label_to_id
 
 
-def build_label_to_startnode(language_node: Dict[str, Any], id_to_label: Dict[int, str]) -> Dict[str, Optional[str]]:
+def build_label_to_startnode(language_node: Dict[str, Any], id_to_label: Dict[int, str], experience_type: str = "kiosk") -> Dict[str, Optional[str]]:
     next_obj = language_node.get("next") or {}
     conditions = next_obj.get("conditions") or []
     default_result = next_obj.get("default")
     label_to_start: Dict[str, Optional[str]] = {}
+    
     # Build explicit mappings from conditions
-    for cond in conditions:
-        if cond.get("lval") != "reason_id":
-            continue
-        try:
-            rval = int(cond.get("rval"))
-        except Exception:  # noqa: BLE001
-            continue
+    for i, cond in enumerate(conditions):
+        if experience_type == "registration":
+            # Registration experiences use index-based conditions
+            # The condition index corresponds to the branch index
+            rval = i
+        else:
+            # Kiosk workflows use reason_id or language_id conditions
+            if cond.get("lval") not in ["reason_id", "language_id"]:
+                continue
+            try:
+                rval = int(cond.get("rval"))
+            except Exception:  # noqa: BLE001
+                continue
+        
         result = cond.get("result")
         label = id_to_label.get(rval)
         if label is not None:
             label_to_start[label] = str(result) if result is not None else None
+    
     # Any choice without an explicit condition should inherit the page default
     if default_result is not None:
         for choice_id, label in id_to_label.items():
@@ -946,6 +1007,109 @@ def translate_node_strings(
     return translated_count
 
 
+def translate_registration_node_strings(
+    node: Dict[str, Any],
+    target_iso: str,
+    translator: Translator,
+) -> int:
+    """Translate user-visible strings in registration node in-place. Returns number of translated strings."""
+    translated_count = 0
+
+    def translate_string(text: str) -> str:
+        nonlocal translated_count
+        if not text or looks_like_url_or_html(text) or is_only_tokens_or_whitespace(text):
+            return text
+        base_text = text
+        if translator.provider != "mock":
+            base_text = strip_mock_prefix(base_text, target_iso)
+        sanitized, placeholders = extract_tokens(base_text)
+        out = translator.translate(sanitized, target_iso)
+        out = restore_tokens(out, placeholders)
+        if out != text:
+            translated_count += 1
+        return out
+
+    template_id = str(node.get("template_id") or "")
+    config = node.get("configuration", {})
+    
+    # Registration-specific translatable fields
+    registration_translatable_keys = {
+        "page_message", "page_sub_message", "back_button_text", "next_button_text",
+        "title", "label", "placeholder", "help", "description", "error", "errors",
+        "validation_message", "subtitle", "hint"
+    }
+    
+    # Translate basic page fields
+    for key in ["page_message", "page_sub_message", "back_button_text", "next_button_text"]:
+        if key in config and isinstance(config[key], str):
+            config[key] = translate_string(config[key])
+    
+    # Handle different template types
+    if template_id == "form":
+        # Translate form fields
+        fields = config.get("fields", [])
+        for field in fields:
+            if isinstance(field, dict):
+                # Translate field title and label
+                for key in ["title", "label"]:
+                    if key in field and isinstance(field[key], str):
+                        field[key] = translate_string(field[key])
+                
+                # Translate field options
+                options = field.get("options", [])
+                for option in options:
+                    if isinstance(option, dict) and "option" in option:
+                        if isinstance(option["option"], str):
+                            option["option"] = translate_string(option["option"])
+    
+    elif template_id == "branch":
+        # Translate branch values (but not the language branch)
+        flex_field = config.get("flex_field", "")
+        if flex_field != "language":  # Don't translate language choices
+            branches = config.get("branches", [])
+            for branch in branches:
+                if isinstance(branch, dict) and "value" in branch:
+                    if isinstance(branch["value"], str):
+                        branch["value"] = translate_string(branch["value"])
+    
+    # Handle generic configuration translation for other fields
+    def translate_conf_value(value: Any, parent_key: Optional[str] = None) -> Any:
+        if isinstance(value, dict):
+            out: Dict[str, Any] = {}
+            for k, v in value.items():
+                # Never translate flex_field, data_name, or other structural fields
+                if k in ["flex_field", "data_name", "name", "id", "index"]:
+                    out[k] = v
+                    continue
+                # Translate user-visible strings
+                if isinstance(v, str) and k in registration_translatable_keys:
+                    out[k] = translate_string(v)
+                else:
+                    out[k] = translate_conf_value(v, k)
+            return out
+        elif isinstance(value, list):
+            new_list: List[Any] = []
+            for item in value:
+                if isinstance(item, dict):
+                    new_list.append(translate_conf_value(item))
+                elif isinstance(item, str):
+                    # Only translate strings in lists if they're in translatable contexts
+                    new_list.append(translate_string(item))
+                else:
+                    new_list.append(item)
+            return new_list
+        elif isinstance(value, str) and parent_key in registration_translatable_keys:
+            return translate_string(value)
+        else:
+            return value
+    
+    # Apply generic translation to the entire configuration
+    if config:
+        node["configuration"] = translate_conf_value(config)
+    
+    return translated_count
+
+
 def get_subgraph_nodes(inner: Dict[str, Any], start_id: str) -> Set[str]:
     """Get all node IDs that are reachable from start_id."""
     _, visited = walk_subgraph(inner, start_id)
@@ -1154,9 +1318,10 @@ def process_languages(
     source_label: str,
     language_map: Dict[str, str],
     translator: Translator,
+    experience_type: str = "kiosk",
 ) -> Summary:
-    id_to_label, label_to_id = build_choice_maps(language_node)
-    label_to_start = build_label_to_startnode(language_node, id_to_label)
+    id_to_label, label_to_id = build_choice_maps(language_node, experience_type)
+    label_to_start = build_label_to_startnode(language_node, id_to_label, experience_type)
 
     if source_label not in label_to_id:
         raise ValueError(f"Source language label '{source_label}' not found among choices")
@@ -1261,7 +1426,10 @@ def process_languages(
                 if new_id not in inner["nodes"]:
                     continue
                 node = inner["nodes"][new_id]
-                translated_here += translate_node_strings(node, target_iso, translator)
+                if experience_type == "registration":
+                    translated_here += translate_registration_node_strings(node, target_iso, translator)
+                else:
+                    translated_here += translate_node_strings(node, target_iso, translator)
             summary.nodes_created += max(0, len(mapping) - 1)  # excluding the grafted start
             summary.nodes_updated += 1  # start node overwritten
             summary.strings_translated += translated_here
@@ -1430,6 +1598,7 @@ def load_config_from_env_and_args(args: argparse.Namespace) -> Config:
     translator_endpoint = str(args.translator_endpoint or os.getenv("SIS_TRANSLATOR_ENDPOINT") or TRANSLATOR_ENDPOINT)
     rate_limit_qps = float(os.getenv("SIS_RATE_LIMIT_QPS") or RATE_LIMIT_QPS)
     log_level = str(args.log_level or os.getenv("SIS_LOG_LEVEL") or LOG_LEVEL)
+    experience_type = str(args.experience_type or os.getenv("SIS_EXPERIENCE_TYPE") or EXPERIENCE_TYPE)
 
     return Config(
         workflow_id=workflow_id,
@@ -1440,7 +1609,9 @@ def load_config_from_env_and_args(args: argparse.Namespace) -> Config:
         dry_run=dry_run,
         translator=translator,
         translator_api_key=translator_api_key,
+        translator_endpoint=translator_endpoint,
         rate_limit_qps=rate_limit_qps,
+        experience_type=experience_type,
         log_level=log_level,
         translator_endpoint=translator_endpoint,
     )
@@ -1456,6 +1627,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--translator", choices=["mock", "deepl", "google", "libretranslate"], help="Translation provider", required=False)
     p.add_argument("--translator-api-key", help="Translator API key for the chosen provider", required=False)
     p.add_argument("--translator-endpoint", help="Translator endpoint URL (e.g., LibreTranslate instance)", required=False)
+    p.add_argument("--experience-type", choices=["kiosk", "registration"], help="Experience type (kiosk workflows or registration experiences)", required=False)
     p.add_argument("--self-test", action="store_true", help="Run self test on sample payload")
     return p
 
@@ -1503,13 +1675,13 @@ def process_workflow_pipeline(config: Config) -> None:
         workflow, inner = sample_workflow_and_inner()
         logging.info("Loaded sample workflow for self-test")
     else:
-        client = SISClient(config.api_base_url, config.api_token)
-        logging.info("Fetching workflow %s", redact(config.workflow_id))
+        client = SISClient(config.api_base_url, config.api_token, config.experience_type)
+        logging.info("Fetching %s %s", config.experience_type, redact(config.workflow_id))
         workflow = client.get_workflow(config.workflow_id)
-        inner = parse_inner_body(workflow)
+        inner = parse_inner_body(workflow, config.experience_type)
         original_inner = json.loads(json.dumps(inner))
 
-    lang_node_id, lang_node = find_language_page(inner)
+    lang_node_id, lang_node = find_language_page(inner, config.experience_type)
     logging.info("Language page found: node %s", lang_node_id)
 
     summary = process_languages(
@@ -1519,6 +1691,7 @@ def process_workflow_pipeline(config: Config) -> None:
         source_label=config.source_language_label,
         language_map=config.language_map,
         translator=translator,
+        experience_type=config.experience_type,
     )
 
     print_summary(summary)
@@ -1564,12 +1737,19 @@ def process_workflow_pipeline(config: Config) -> None:
         except Exception as _:
             pass
 
-        workflow["body"] = json.dumps(inner, separators=(",", ":"))
-        if args.self_test:  # type: ignore[name-defined]
-            logging.info("Self-test mode: would PUT updated workflow; skipping")
+        # Serialize body based on experience type
+        if config.experience_type == "registration":
+            # Registration experiences store body as JSON object
+            workflow["body"] = inner
         else:
-            client = SISClient(config.api_base_url, config.api_token)
-            logging.info("PUT updated workflow to API")
+            # Kiosk workflows store body as JSON string
+            workflow["body"] = json.dumps(inner, separators=(",", ":"))
+        
+        if args.self_test:  # type: ignore[name-defined]
+            logging.info("Self-test mode: would PUT updated %s; skipping", config.experience_type)
+        else:
+            client = SISClient(config.api_base_url, config.api_token, config.experience_type)
+            logging.info("PUT updated %s to API", config.experience_type)
             client.put_workflow(workflow)
             logging.info("PUT completed successfully")
 
