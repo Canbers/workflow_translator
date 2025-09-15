@@ -31,7 +31,7 @@ REM Check if Streamlit is installed
 python -c "import streamlit" >nul 2>&1
 if errorlevel 1 (
     echo Installing dependencies...
-    pip install -r requirements.txt
+    pip install -r src/requirements.txt
 )
 
 REM Launch Streamlit app
@@ -42,7 +42,7 @@ echo.
 echo Press Ctrl+C to stop the app when you're done.
 echo.
 
-streamlit run streamlit_app.py
+streamlit run src/streamlit_app.py
 
 echo.
 echo App stopped. Press any key to exit...
