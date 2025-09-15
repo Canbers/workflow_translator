@@ -1,6 +1,36 @@
 ## SIS Workflow Translator
 
-This tool upgrades a Sign In Solutions (tractionguest.com) workflow to support translated language paths. It finds the language choice page in a workflow, uses the English branch as a template, and creates or updates parallel paths for each existing non-English language choice. In dry-run mode, it shows what would change; in write mode, it updates the workflow via the API.
+This tool upgrades a Sign In Solutions (tractionguest.com) workflow or registration experience to support translated language paths. It finds the language choice page in a workflow/experience, uses the English branch as a template, and creates or updates parallel paths for each existing non-English language choice. In dry-run mode, it shows what would change; in write mode, it updates the workflow/experience via the API.
+
+**Supports both:**
+- **Kiosk Workflows** (traditional workflows at `/workflows/` endpoint)
+- **Registration Experiences** (new registration flows at `/experiences/` endpoint)
+
+### Key Features
+
+- **Dual Experience Support**: Works with both kiosk workflows and registration experiences
+- **Automatic Language Detection**: Finds language choice pages using different strategies for each experience type
+- **Smart Translation**: Translates user-visible strings while preserving structural data
+- **Registration-Specific Fields**: Handles registration-specific fields like `page_message`, `page_sub_message`, form fields, and branch values
+- **Dry Run Mode**: Preview changes before applying them
+- **Web Interface**: Easy-to-use web app for non-technical users
+- **Command Line**: Full-featured CLI for advanced users and automation
+
+### Experience Types
+
+#### Kiosk Workflows
+- **API Endpoint**: `/workflows/{id}`
+- **Language Page**: Uses `template_id: "visitreason"` with `data_name: "language"`
+- **Language Choices**: Stored in `configuration.reasons` array with `id` and `title` fields
+- **Body Format**: JSON string in `workflow.body`
+- **Translation Fields**: Standard workflow fields like `title`, `label`, `placeholder`, etc.
+
+#### Registration Experiences  
+- **API Endpoint**: `/experiences/{id}`
+- **Language Page**: Uses `template_id: "branch"` with `flex_field: "language"`
+- **Language Choices**: Stored in `configuration.branches` array with `value` field
+- **Body Format**: JSON object in `experience.body`
+- **Translation Fields**: Registration-specific fields like `page_message`, `page_sub_message`, `back_button_text`, `next_button_text`, form field labels, etc.
 
 ### What you need
 
@@ -8,7 +38,110 @@ This tool upgrades a Sign In Solutions (tractionguest.com) workflow to support t
 - An SIS **API token** (Bearer token)
 - Internet access to `https://us.tractionguest.com`
 
+<<<<<<< Updated upstream
 ### Quick start (easiest)
+=======
+## Two ways to run this tool
+
+### 🌐 Option 1: Web App (Recommended for most users)
+
+**Easiest way - just double-click and go!**
+
+The web app provides a simple point-and-click interface where you can:
+- Choose between Kiosk workflows or Registration experiences
+- Enter your configuration details in a form
+- See live logs as the translation runs
+- View results in a clean summary
+
+**Quick start:**
+1. Download this project folder
+2. **Mac users:** Double-click `Launch_SIS_Translator.command`
+3. **Windows users:** Double-click `Launch_SIS_Translator.bat`
+4. The app opens in your browser automatically
+5. Fill in your Workflow ID and API token, then click "Run"
+
+**Manual launch (if needed):**
+```bash
+# First time setup
+bash activate.sh
+
+# Launch the web app
+source .venv/bin/activate
+streamlit run streamlit_app.py
+```
+
+### 💻 Option 2: Command Line Script (For advanced users)
+
+**For users comfortable with terminal commands**
+
+Run the Python script directly with command-line arguments for more control and automation.
+
+**Quick start:**
+```bash
+# First time setup
+bash activate.sh
+
+# Edit .env file with your settings
+# Then run:
+python3 sis_translate_workflow.py --write
+
+# For registration experiences:
+python3 sis_translate_workflow.py --write --experience-type registration
+```
+
+---
+
+## Experience Types
+
+### Kiosk Workflows (Default)
+- **API Endpoint:** `/workflows/{id}`
+- **Language Page:** Template ID `visitreason` with `data_name: "language"`
+- **Data Format:** `body` is a JSON string
+- **Translation Fields:** Standard workflow fields like `title`, `message`, `back`, `forward`, etc.
+
+### Registration Experiences
+- **API Endpoint:** `/experiences/{id}`
+- **Language Page:** Template ID `branch` with `flex_field: "language"`
+- **Data Format:** `body` is a JSON object
+- **Translation Fields:** Registration-specific fields:
+  - Page fields: `page_message`, `page_sub_message`, `back_button_text`, `next_button_text`
+  - Form fields: `configuration.fields.title`, `configuration.fields.options[].option`
+  - Branch fields: `configuration.branches[].value` (except language choices)
+
+---
+
+## Translation providers at a glance
+
+Choose a provider based on your constraints. The script supports four modes:
+
+- Mock (default)
+  - Pros: Free, instant, no setup; safe for testing. Shows output like `[es] Hello` so you can see where translations would happen.
+  - Cons: Not real translation; for demos/tests only.
+  - Requirements: None.
+
+- LibreTranslate (local, free)
+  - Pros: Free, no account or billing. Runs entirely on your machine. Auto-starts/stops when needed.
+  - Cons: First run downloads models; uses local CPU/RAM; quality varies by language pair vs commercial APIs.
+  - Requirements: None if you let the script auto-start (uses Docker if installed, else a pip-based server). Optional: install Docker for the simplest one-command setup.
+
+- Google Translate API
+  - Pros: High quality for many languages; scalable and reliable.
+  - Cons: Requires Google Cloud project and billing; paid per character.
+  - Requirements: API key (`SIS_TRANSLATOR_API_KEY`).
+
+- DeepL API
+  - Pros: Excellent quality for supported languages; nuanced tone control.
+  - Cons: Paid; supports fewer languages than Google.
+  - Requirements: API key (`SIS_TRANSLATOR_API_KEY`).
+
+Tip: Start with Mock for a dry run, then switch to LibreTranslate local for free real translations. If you need higher quality or scale, use Google or DeepL.
+
+
+
+## Detailed setup instructions
+
+### First time setup (both options)
+>>>>>>> Stashed changes
 
 1) Run the one-time setup script
 ```bash
