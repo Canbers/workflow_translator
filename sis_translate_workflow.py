@@ -851,6 +851,20 @@ def translate_node_strings(
     return translated_count
 
 
+def get_subgraph_nodes(inner: Dict[str, Any], start_id: str) -> Set[str]:
+    """Get all node IDs that are reachable from start_id."""
+    _, visited = walk_subgraph(inner, start_id)
+    return visited
+
+
+def remove_subgraph_nodes(inner: Dict[str, Any], node_ids: Set[str]) -> None:
+    """Remove the specified nodes from the workflow."""
+    nodes = inner.get("nodes", {})
+    for node_id in node_ids:
+        if node_id in nodes:
+            del nodes[node_id]
+
+
 def clone_subgraph(
     inner: Dict[str, Any],
     start_id: str,
@@ -1091,6 +1105,12 @@ def process_languages(
         if existing_start and str(existing_start) in inner.get("nodes", {}):
             # Graft template English path onto existing start node; do not edit conditions
             logging.info("Grafting template for '%s' at start node %s", label, existing_start)
+            
+            # First, identify old nodes from the existing language branch
+            # to prevent node bloat when running the script multiple times
+            old_nodes = get_subgraph_nodes(inner, str(existing_start))
+            logging.info("Will remove %d old nodes from existing '%s' branch", len(old_nodes), label)
+            
             # Capture existing end thanks reachable from this language path (default)
             # by walking from current start and taking default chain to a thanks, if present
             existing_end_thanks_id: Optional[str] = None
@@ -1126,6 +1146,12 @@ def process_languages(
                 except Exception:  # noqa: BLE001
                     pass
                 mapping = {k: (str(existing_start) if v == new_start else v) for k, v in mapping.items()}
+                
+            # Now remove the old nodes (excluding the start node which we just replaced)
+            old_nodes_to_remove = old_nodes - {str(existing_start)}
+            if old_nodes_to_remove:
+                logging.info("Removing %d old disconnected nodes from '%s' branch", len(old_nodes_to_remove), label)
+                remove_subgraph_nodes(inner, old_nodes_to_remove)
 
             # Adjust thanks reuse and crumbs
             adjust_cloned_branch_for_end_thanks_and_crumbs(
