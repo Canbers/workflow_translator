@@ -81,7 +81,6 @@ bash activate.sh
 # Edit .env file with your settings
 # Then run:
 python3 sis_translate_workflow.py --write
-
 # For registration experiences:
 python3 sis_translate_workflow.py --write --experience-type registration
 ```
@@ -153,6 +152,8 @@ SIS_WORKFLOW_ID=123456
 Notes:
 - `SIS_API_KEY` is preferred. `SIS_API_TOKEN` also works for backward compatibility.
 - The script auto-loads `.env` every run; you do not need to export variables manually.
+
+### Command line script detailed usage
 
 3) Try a safe self-test
 ```bash
@@ -234,14 +235,51 @@ If not set, common languages are inferred by label.
 
 - **Select a translator**
   - Default is `mock` (safe testing): it wraps text like `[es] Hello`.
-  - To use Google Translate or DeepL, set provider and API key in `.env`:
+  - To use Google Translate, DeepL, or LibreTranslate, set provider and credentials in `.env`:
 ```bash
 SIS_TRANSLATOR=google
 SIS_TRANSLATOR_API_KEY="<GOOGLE_API_KEY>"
 # or
 SIS_TRANSLATOR=deepl
 SIS_TRANSLATOR_API_KEY="<DEEPL_API_KEY>"
+# or
+SIS_TRANSLATOR=libretranslate
+# Optional if your instance requires it:
+SIS_TRANSLATOR_API_KEY="<LIBRETRANSLATE_API_KEY>"
+# Optional custom endpoint (defaults to https://libretranslate.com/translate):
+SIS_TRANSLATOR_ENDPOINT="https://your-libretranslate.example.com/translate"
 ```
+
+When using `libretranslate`, the script will send requests to the endpoint above with JSON payloads. If `SIS_TRANSLATOR_ENDPOINT` is not set, it uses `https://libretranslate.com/translate`. If your instance requires an API key, set `SIS_TRANSLATOR_API_KEY`.
+
+### Use LibreTranslate locally for free (no account, no billing)
+
+Run a local LibreTranslate service and the script will auto-detect it.
+
+```bash
+bash run_local_libretranslate.sh start           # Uses Docker if available, otherwise pip
+python3 sis_translate_workflow.py --translator libretranslate
+```
+
+Notes:
+- Auto-detection checks `http://localhost:5000/languages` and `http://127.0.0.1:5000/languages`.
+- You can explicitly set the endpoint if desired:
+```bash
+python3 sis_translate_workflow.py --translator libretranslate \
+  --translator-endpoint http://localhost:5000/translate
+```
+- Stop the local service with:
+```bash
+bash run_local_libretranslate.sh stop
+```
+
+### Auto-start/stop local LibreTranslate
+
+If you run with `--translator libretranslate` and no `--translator-endpoint` is provided, the script will:
+- First try to connect to `http://localhost:5000/translate`.
+- If not found, it will attempt to auto-start a local LibreTranslate using `run_local_libretranslate.sh` (Docker if available, otherwise pip) and will auto-stop it when the script exits.
+
+To disable auto-start behavior, explicitly set a public endpoint via `--translator-endpoint` or `SIS_TRANSLATOR_ENDPOINT`.
 
 - **Rate limiting** (requests per second; default 8):
 ```bash
@@ -298,4 +336,3 @@ Write changes with CLI token and verbose logs:
 ```bash
 python3 sis_translate_workflow.py --token "<TOKEN>" --write --log-level DEBUG
 ```
-

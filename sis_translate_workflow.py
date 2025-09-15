@@ -22,6 +22,8 @@ import os
 import re
 import sys
 import time
+import subprocess
+import atexit
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -38,12 +40,15 @@ API_TOKEN: str = ""  # must be provided via --token or env
 SOURCE_LANGUAGE_LABEL: str = "English"
 LANGUAGE_MAP: Dict[str, str] = {"English": "en"}
 DRY_RUN: bool = True
-TRANSLATOR: str = "mock"  # "deepl", "google", or "mock"
+TRANSLATOR: str = "mock"  # "deepl", "google", "libretranslate", or "mock"
 TRANSLATOR_API_KEY: str = ""
 TRANSLATOR_ENDPOINT: str = ""
 RATE_LIMIT_QPS: float = 8.0
 LOG_LEVEL: str = "INFO"
 EXPERIENCE_TYPE: str = "kiosk"  # "kiosk" or "registration"
+
+# Optional translator-specific settings
+TRANSLATOR_ENDPOINT: str = ""  # e.g., LibreTranslate endpoint
 
 
 # =============================
@@ -148,12 +153,14 @@ class RateLimiter:
 
 
 class Translator:
-    def __init__(self, provider: str, api_key: str, qps: float) -> None:
+    def __init__(self, provider: str, api_key: str, qps: float, endpoint: str = "") -> None:
         self.provider = provider.lower()
         self.api_key = api_key
         self.rate_limiter = RateLimiter(qps)
+        self.endpoint = endpoint
+        self._libre_forbidden_warned: bool = False
 
-        if self.provider not in {"mock", "deepl", "google"}:
+        if self.provider not in {"mock", "deepl", "google", "libretranslate"}:
             raise ValueError(f"Unsupported translator provider: {provider}")
         if self.provider in {"deepl", "google"} and not self.api_key:
             raise ValueError("Translator API key is required for non-mock providers.")
@@ -167,6 +174,8 @@ class Translator:
             return self._translate_deepl(text, target_iso)
         if self.provider == "google":
             return self._translate_google(text, target_iso)
+        if self.provider == "libretranslate":
+            return self._translate_libretranslate(text, target_iso)
         raise ValueError(f"Unsupported provider: {self.provider}")
 
     def _translate_deepl(self, text: str, target_iso: str) -> str:
@@ -213,6 +222,91 @@ class Translator:
         except Exception as exc:  # noqa: BLE001
             logging.warning("Google translate error: %s", exc)
             return text
+
+    def _translate_libretranslate(self, text: str, target_iso: str) -> str:
+        # LibreTranslate typically uses two-letter lowercase codes (e.g., 'es').
+        target_lang = target_iso.split("-")[0].lower()
+        self.rate_limiter.wait()
+        url = self.endpoint.strip() or "https://libretranslate.com/translate"
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "q": text,
+            "source": "auto",
+            "target": target_lang,
+            "format": "text",
+        }
+        # Some instances require an API key; include if provided
+        if self.api_key:
+            data["api_key"] = self.api_key
+        try:
+            resp = requests.post(url, json=data, headers=headers, timeout=20)
+            if resp.status_code != 200:
+                # Provide one-time helpful guidance on 403 errors
+                if resp.status_code == 403 and not self._libre_forbidden_warned:
+                    self._libre_forbidden_warned = True
+                    logging.warning(
+                        "LibreTranslate returned 403 (likely requires API key). To use it for free locally, run 'bash run_local_libretranslate.sh start' and re-run with --translator libretranslate. Or set SIS_TRANSLATOR_ENDPOINT to your local URL."
+                    )
+                raise RuntimeError(f"LibreTranslate HTTP {resp.status_code}: {resp.text[:200]}")
+            payload = resp.json()
+            translated = payload.get("translatedText") or payload.get("translation")
+            if not translated:
+                raise RuntimeError("LibreTranslate: missing 'translatedText'")
+            return html.unescape(str(translated))
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("LibreTranslate translate error: %s", exc)
+            return text
+
+
+def detect_local_libretranslate_endpoint() -> Optional[str]:
+    """Return a local LibreTranslate translate endpoint if reachable."""
+    candidates = [
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
+    ]
+    for base in candidates:
+        try:
+            resp = requests.get(f"{base}/languages", timeout=1.5)
+            if resp.status_code == 200:
+                return f"{base}/translate"
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def _helper_script_path() -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(here, "run_local_libretranslate.sh")
+
+
+def start_local_libretranslate_if_needed(port: int = 5000) -> Optional[str]:
+    """Ensure a local LibreTranslate is running; start via helper if not.
+
+    Returns the translate endpoint URL if successful, else None.
+    Registers an atexit handler to stop it if we started it.
+    """
+    ep = detect_local_libretranslate_endpoint()
+    if ep:
+        return ep
+    script = _helper_script_path()
+    if not os.path.exists(script):
+        logging.debug("Helper script not found: %s", script)
+        return None
+    try:
+        logging.info("Starting local LibreTranslate (auto) on port %s", port)
+        subprocess.run([script, "start", str(port)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Wait for readiness
+        for _ in range(45):
+            ep2 = detect_local_libretranslate_endpoint()
+            if ep2:
+                # Register stop at exit
+                atexit.register(lambda: subprocess.run([script, "stop", str(port)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+                return ep2
+            time.sleep(1.0)
+        logging.warning("Local LibreTranslate did not become ready in time")
+    except Exception as exc:  # noqa: BLE001
+        logging.debug("Failed to start local LibreTranslate: %s", exc)
+    return None
 
 
 # =============================
@@ -1016,6 +1110,20 @@ def translate_registration_node_strings(
     return translated_count
 
 
+def get_subgraph_nodes(inner: Dict[str, Any], start_id: str) -> Set[str]:
+    """Get all node IDs that are reachable from start_id."""
+    _, visited = walk_subgraph(inner, start_id)
+    return visited
+
+
+def remove_subgraph_nodes(inner: Dict[str, Any], node_ids: Set[str]) -> None:
+    """Remove the specified nodes from the workflow."""
+    nodes = inner.get("nodes", {})
+    for node_id in node_ids:
+        if node_id in nodes:
+            del nodes[node_id]
+
+
 def clone_subgraph(
     inner: Dict[str, Any],
     start_id: str,
@@ -1257,6 +1365,12 @@ def process_languages(
         if existing_start and str(existing_start) in inner.get("nodes", {}):
             # Graft template English path onto existing start node; do not edit conditions
             logging.info("Grafting template for '%s' at start node %s", label, existing_start)
+            
+            # First, identify old nodes from the existing language branch
+            # to prevent node bloat when running the script multiple times
+            old_nodes = get_subgraph_nodes(inner, str(existing_start))
+            logging.info("Will remove %d old nodes from existing '%s' branch", len(old_nodes), label)
+            
             # Capture existing end thanks reachable from this language path (default)
             # by walking from current start and taking default chain to a thanks, if present
             existing_end_thanks_id: Optional[str] = None
@@ -1292,6 +1406,12 @@ def process_languages(
                 except Exception:  # noqa: BLE001
                     pass
                 mapping = {k: (str(existing_start) if v == new_start else v) for k, v in mapping.items()}
+                
+            # Now remove the old nodes (excluding the start node which we just replaced)
+            old_nodes_to_remove = old_nodes - {str(existing_start)}
+            if old_nodes_to_remove:
+                logging.info("Removing %d old disconnected nodes from '%s' branch", len(old_nodes_to_remove), label)
+                remove_subgraph_nodes(inner, old_nodes_to_remove)
 
             # Adjust thanks reuse and crumbs
             adjust_cloned_branch_for_end_thanks_and_crumbs(
@@ -1475,7 +1595,7 @@ def load_config_from_env_and_args(args: argparse.Namespace) -> Config:
     )
     translator = str(args.translator or os.getenv("SIS_TRANSLATOR") or TRANSLATOR)
     translator_api_key = str(args.translator_api_key or os.getenv("SIS_TRANSLATOR_API_KEY") or TRANSLATOR_API_KEY)
-    translator_endpoint = str(os.getenv("SIS_TRANSLATOR_ENDPOINT") or TRANSLATOR_ENDPOINT)
+    translator_endpoint = str(args.translator_endpoint or os.getenv("SIS_TRANSLATOR_ENDPOINT") or TRANSLATOR_ENDPOINT)
     rate_limit_qps = float(os.getenv("SIS_RATE_LIMIT_QPS") or RATE_LIMIT_QPS)
     log_level = str(args.log_level or os.getenv("SIS_LOG_LEVEL") or LOG_LEVEL)
     experience_type = str(args.experience_type or os.getenv("SIS_EXPERIENCE_TYPE") or EXPERIENCE_TYPE)
@@ -1493,6 +1613,7 @@ def load_config_from_env_and_args(args: argparse.Namespace) -> Config:
         rate_limit_qps=rate_limit_qps,
         experience_type=experience_type,
         log_level=log_level,
+        translator_endpoint=translator_endpoint,
     )
 
 
@@ -1503,8 +1624,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--token", help="API bearer token", required=False)
     p.add_argument("--source-label", help="Source language label (e.g., English)", required=False)
     p.add_argument("--log-level", help="Logging level (DEBUG, INFO, ...)", required=False)
-    p.add_argument("--translator", choices=["mock", "deepl", "google"], help="Translation provider", required=False)
+    p.add_argument("--translator", choices=["mock", "deepl", "google", "libretranslate"], help="Translation provider", required=False)
     p.add_argument("--translator-api-key", help="Translator API key for the chosen provider", required=False)
+    p.add_argument("--translator-endpoint", help="Translator endpoint URL (e.g., LibreTranslate instance)", required=False)
     p.add_argument("--experience-type", choices=["kiosk", "registration"], help="Experience type (kiosk workflows or registration experiences)", required=False)
     p.add_argument("--self-test", action="store_true", help="Run self test on sample payload")
     return p
@@ -1521,7 +1643,23 @@ def process_workflow_pipeline(config: Config) -> None:
     else:
         logging.info("Running in WRITE mode (will PUT changes)")
 
-    translator = Translator(config.translator, config.translator_api_key, config.rate_limit_qps)
+    # If using libretranslate and no endpoint provided, try to auto-detect a local instance
+    endpoint = config.translator_endpoint
+    if (config.translator.lower() == "libretranslate") and (not endpoint):
+        autodetected = detect_local_libretranslate_endpoint()
+        if autodetected:
+            logging.info("Using local LibreTranslate at %s", autodetected)
+            endpoint = autodetected
+        else:
+            # Try to auto-start a local instance
+            started = start_local_libretranslate_if_needed(port=5000)
+            if started:
+                logging.info("Auto-started local LibreTranslate at %s", started)
+                endpoint = started
+            else:
+                endpoint = ""  # fall back to default in translator
+
+    translator = Translator(config.translator, config.translator_api_key, config.rate_limit_qps, endpoint=endpoint)
 
     if not config.api_token and not args.self_test:  # type: ignore[name-defined]
         raise ValueError(
