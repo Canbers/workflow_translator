@@ -38,9 +38,6 @@ This tool upgrades a Sign In Solutions (tractionguest.com) workflow or registrat
 - An SIS **API token** (Bearer token)
 - Internet access to `https://us.tractionguest.com`
 
-<<<<<<< Updated upstream
-### Quick start (easiest)
-=======
 ## Two ways to run this tool
 
 ### 🌐 Option 1: Web App (Recommended for most users)
@@ -141,7 +138,6 @@ Tip: Start with Mock for a dry run, then switch to LibreTranslate local for free
 ## Detailed setup instructions
 
 ### First time setup (both options)
->>>>>>> Stashed changes
 
 1) Run the one-time setup script
 ```bash
