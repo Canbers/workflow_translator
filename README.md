@@ -2,6 +2,9 @@
 
 This tool upgrades a Sign In Solutions (tractionguest.com) workflow or registration experience to support translated language paths. It finds the language choice page in a workflow/experience, uses the English branch as a template, and creates or updates parallel paths for each existing non-English language choice. In dry-run mode, it shows what would change; in write mode, it updates the workflow/experience via the API.
 
+### Video walkthrough:
+https://signinsolutions.wistia.com/medias/omesvlrctn
+
 **Supports both:**
 - **Kiosk Workflows** (traditional workflows at `/workflows/` endpoint)
 - **Registration Experiences** (new registration flows at `/experiences/` endpoint)
