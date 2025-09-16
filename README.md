@@ -51,20 +51,20 @@ The web app provides a simple point-and-click interface where you can:
 - View results in a clean summary
 
 **Quick start:**
-1. Download this project folder
-2. **Mac users:** Double-click `Launch_SIS_Translator.command`
-3. **Windows users:** Double-click `Launch_SIS_Translator.bat`
-4. The app opens in your browser automatically
-5. Fill in your Workflow ID and API token, then click "Run"
+1. Download this project folder to your computer
+2. **Mac users:** Double-click `Launch_Mac.command` (the app will set itself up and open in your browser)
+3. **Windows users:** Double-click `Launch_Windows.bat` (the app will set itself up and open in your browser)
+4. When the app opens in your browser, fill in your Workflow ID and API token
+5. Click "Run Translation" to start
 
 **Manual launch (if needed):**
 ```bash
 # First time setup
-bash activate.sh
+bash src/activate.sh
 
 # Launch the web app
 source .venv/bin/activate
-streamlit run streamlit_app.py
+streamlit run src/streamlit_app.py
 ```
 
 ### 💻 Option 2: Command Line Script (For advanced users)
@@ -76,13 +76,13 @@ Run the Python script directly with command-line arguments for more control and 
 **Quick start:**
 ```bash
 # First time setup
-bash activate.sh
+bash src/activate.sh
 
 # Edit .env file with your settings
 # Then run:
-python3 sis_translate_workflow.py --write
+python3 src/sis_translate_workflow.py --write
 # For registration experiences:
-python3 sis_translate_workflow.py --write --experience-type registration
+python3 src/sis_translate_workflow.py --write --experience-type registration
 ```
 
 ---
@@ -140,11 +140,20 @@ Tip: Start with Mock for a dry run, then switch to LibreTranslate local for free
 
 1) Run the one-time setup script
 ```bash
-bash activate.sh
+bash src/activate.sh
 ```
 This creates a local virtual environment, installs dependencies, and prepares your `.env` file.
 
-2) Open `.env` and fill in at least:
+2) Create and configure your `.env` file:
+
+If the setup script didn't create a `.env` file for you, create one manually:
+```bash
+# Create the .env file in the project root
+touch .env  # On Mac/Linux
+# or on Windows: type nul > .env
+```
+
+Then open `.env` in any text editor and add at least:
 ```
 SIS_API_KEY=your_api_token_here
 SIS_WORKFLOW_ID=123456
@@ -157,17 +166,17 @@ Notes:
 
 3) Try a safe self-test
 ```bash
-python3 sis_translate_workflow.py --self-test
+python3 src/sis_translate_workflow.py --self-test
 ```
 
 4) Run a dry run against your workflow (no changes made)
 ```bash
-python3 sis_translate_workflow.py
+python3 src/sis_translate_workflow.py
 ```
 
 5) Apply changes
 ```bash
-python3 sis_translate_workflow.py --write
+python3 src/sis_translate_workflow.py --write
 ```
 
 ### Alternative setup (manual)
@@ -176,8 +185,8 @@ If you prefer manual steps:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env  # then edit .env
+pip install -r src/requirements.txt
+touch .env  # Create .env file manually, then edit it
 ```
 
 ### Get your API token
@@ -189,7 +198,7 @@ If your account is not in the "US" data centre, change the subdomain to your acc
 
 Dry-run is safe and does not modify anything. It prints a summary of changes.
 ```bash
-python3 sis_translate_workflow.py
+python3 src/sis_translate_workflow.py
 ```
 
 Expected output includes a summary like:
@@ -205,7 +214,7 @@ Warnings            : 0
 
 When you are satisfied with the dry run, add `--write` to save changes back to the API.
 ```bash
-python3 sis_translate_workflow.py --write
+python3 src/sis_translate_workflow.py --write
 ```
 
 The script will PUT the updated `workflow.body` back to the same endpoint.
@@ -214,17 +223,32 @@ The script will PUT the updated `workflow.body` back to the same endpoint.
 
 - **Use a CLI token instead of .env**
 ```bash
-python3 sis_translate_workflow.py --token "<YOUR_BEARER_TOKEN>"
+python3 src/sis_translate_workflow.py --token "<YOUR_BEARER_TOKEN>"
+```
+
+- **Specify workflow ID via command line** (alternative to .env)
+```bash
+python3 src/sis_translate_workflow.py --workflow 123456
+```
+
+- **Choose experience type** (kiosk workflows or registration experiences)
+```bash
+python3 src/sis_translate_workflow.py --experience-type registration
+```
+
+- **Run self-test** (safe demo with sample data)
+```bash
+python3 src/sis_translate_workflow.py --self-test
 ```
 
 - **Change the source (template) language label** (default `English`)
 ```bash
-python3 sis_translate_workflow.py --source-label "English"
+python3 src/sis_translate_workflow.py --source-label "English"
 ```
 
 - **Choose logging level** (default `INFO`)
 ```bash
-python3 sis_translate_workflow.py --log-level DEBUG
+python3 src/sis_translate_workflow.py --log-level DEBUG
 ```
 
 - **Configure language codes** (optional). Map choice labels to ISO codes (in `.env` or CLI env):
@@ -257,27 +281,27 @@ When using `libretranslate`, the script will send requests to the endpoint above
 Run a local LibreTranslate service and the script will auto-detect it.
 
 ```bash
-bash run_local_libretranslate.sh start           # Uses Docker if available, otherwise pip
-python3 sis_translate_workflow.py --translator libretranslate
+bash src/run_local_libretranslate.sh start           # Uses Docker if available, otherwise pip
+python3 src/sis_translate_workflow.py --translator libretranslate
 ```
 
 Notes:
 - Auto-detection checks `http://localhost:5000/languages` and `http://127.0.0.1:5000/languages`.
 - You can explicitly set the endpoint if desired:
 ```bash
-python3 sis_translate_workflow.py --translator libretranslate \
+python3 src/sis_translate_workflow.py --translator libretranslate \
   --translator-endpoint http://localhost:5000/translate
 ```
 - Stop the local service with:
 ```bash
-bash run_local_libretranslate.sh stop
+bash src/run_local_libretranslate.sh stop
 ```
 
 ### Auto-start/stop local LibreTranslate
 
 If you run with `--translator libretranslate` and no `--translator-endpoint` is provided, the script will:
 - First try to connect to `http://localhost:5000/translate`.
-- If not found, it will attempt to auto-start a local LibreTranslate using `run_local_libretranslate.sh` (Docker if available, otherwise pip) and will auto-stop it when the script exits.
+- If not found, it will attempt to auto-start a local LibreTranslate using `src/run_local_libretranslate.sh` (Docker if available, otherwise pip) and will auto-stop it when the script exits.
 
 To disable auto-start behavior, explicitly set a public endpoint via `--translator-endpoint` or `SIS_TRANSLATOR_ENDPOINT`.
 
@@ -303,22 +327,79 @@ SIS_DRY_RUN=true  # or false
 
 Run the built-in self-test:
 ```bash
-python3 sis_translate_workflow.py --self-test
+python3 src/sis_translate_workflow.py --self-test
 ```
 
 ### Troubleshooting
 
+#### Common Launch Issues
+
+- **Mac: "Permission denied" when double-clicking Launch_Mac.command**
+  - Right-click the file → "Open With" → "Terminal" 
+  - Or open Terminal, navigate to the folder, and run: `chmod +x Launch_Mac.command && ./Launch_Mac.command`
+
+- **Windows: Script won't run or opens briefly then closes**
+  - The Windows launcher has a known issue - it references `activate.bat` but the file is `activate.sh`
+  - Use the manual setup instead: Open Command Prompt in the project folder and run `bash src/activate.sh`
+
+- **Browser doesn't open automatically**
+  - Manually open your web browser and go to: `http://localhost:8501`
+  - If that doesn't work, try: `http://127.0.0.1:8501`
+
+#### Setup Issues
+
 - `ModuleNotFoundError: No module named 'requests'`
-  - Run `bash activate.sh` again, or inside the venv run `pip install -r requirements.txt`.
+  - Run `bash src/activate.sh` again, or inside the venv run `pip install -r src/requirements.txt`.
+
+- **Python not found or wrong version**
+  - Make sure you have Python 3.10+ installed
+  - On Mac: `python3 --version` should show 3.10 or higher
+  - On Windows: Check if Python is added to your system PATH
+
+- **Virtual environment issues**
+  - Delete the `.venv` folder and run `bash src/activate.sh` again
+  - Make sure you're in the correct project directory
+
+#### API and Configuration Issues
 
 - `API unauthorized (401)` or `forbidden (403)`
   - Check the token value and permissions. Ensure `.env` has `SIS_API_KEY` (or pass `--token`).
+  - Verify your API token is still valid in the SIS developer portal
+
+- **Workflow ID not found**
+  - Double-check the workflow ID number
+  - Make sure you have access to that workflow in your SIS account
 
 - `Language page not found`
   - The workflow must contain a page with `configuration.data_name == "language"` and choices.
+  - For registration experiences, it should have `flex_field: "language"`
 
-- Script runs but nothing changes
+#### Translation Issues
+
+- **Script runs but nothing changes**
   - Only existing non-English choices are processed. The script does not add new language choices.
+  - Make sure your workflow already has non-English language options set up
+
+- **LibreTranslate connection issues**
+  - Port 5000 might be in use by another application
+  - Try a different port: `bash src/run_local_libretranslate.sh start 5001`
+  - Check if Docker is running (if using Docker mode)
+
+- **Translation quality issues**
+  - Try different translation providers (Google, DeepL vs LibreTranslate)
+  - Check if the source language is correctly identified
+
+#### Web Interface Issues
+
+- **Streamlit app won't start**
+  - Make sure no other app is using port 8501
+  - Check the terminal/command prompt for error messages
+  - Try restarting the launcher script
+
+- **App is slow or unresponsive**
+  - Large workflows with many translations can take time
+  - Check the console output for progress updates
+  - Consider using a more powerful translation service (Google/DeepL vs LibreTranslate)
 
 ### Security notes
 
@@ -329,10 +410,10 @@ python3 sis_translate_workflow.py --self-test
 
 Dry run with .env values:
 ```bash
-python3 sis_translate_workflow.py
+python3 src/sis_translate_workflow.py
 ```
 
 Write changes with CLI token and verbose logs:
 ```bash
-python3 sis_translate_workflow.py --token "<TOKEN>" --write --log-level DEBUG
+python3 src/sis_translate_workflow.py --token "<TOKEN>" --write --log-level DEBUG
 ```
